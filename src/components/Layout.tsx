@@ -40,7 +40,7 @@ export function Layout() {
           </Dialog>
         </Container>
       </header>
-      <main id="main" className="flex-1"><Outlet /></main>
+      <main id="main" className={/\/seats\/?$/.test(loc.pathname) ? 'min-h-[115svh] flex-1' : 'flex-1'}><Outlet /></main>
       <footer id="about" className="border-t border-border py-12 text-sm text-text-muted">
         <Container className="grid gap-6 md:grid-cols-3">
           <div><p className="font-display text-2xl tracking-wide text-text">LUMEN CINEMA [PH]</p><p>1 Placeholder Street, Tirana [PH]</p></div>

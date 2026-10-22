@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState, Component, type ReactNode
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Box, Eye, RotateCcw } from 'lucide-react'
-import { getMovie, getSeatMap, MAX_SEATS, type Seat } from '@/lib/api'
+import { getMovie, getSeatMap, listShows, MAX_SEATS, type Seat } from '@/lib/api'
 import { useData } from '@/lib/useData'
 import { useBooking } from '@/lib/booking'
 import { decideThree, isPhone, type ThreeDecision } from '@/lib/device'
@@ -23,7 +23,8 @@ class GLBoundary extends Component<{ onError: () => void; children: ReactNode },
 
 export default function SeatsPage() {
   const { id = '' } = useParams()
-  const [q] = useSearchParams()
+  const [q, setQ] = useSearchParams()
+  const [noShows, setNoShows] = useState(false)
   const showId = q.get('show') ?? ''
   const nav = useNavigate()
   const booking = useBooking()
@@ -41,6 +42,21 @@ export default function SeatsPage() {
   const [resetKey, setResetKey] = useState(0)
   const [collapsed, setCollapsed] = useState(false)
 
+  // No ?show= in the URL (e.g. a shared/bookmarked /movie/:id/seats link): pick the next bookable show
+  // instead of dead-ending, keeping other params such as ?3d=1.
+  useEffect(() => {
+    if (showId) return
+    let live = true
+    listShows({ movieId: id }).then((list) => {
+      if (!live) return
+      const open = list.filter((s) => !s.soldOut)
+      const next = open.find((s) => new Date(s.start).getTime() > Date.now()) ?? open[0]
+      if (!next) return setNoShows(true)
+      const p = new URLSearchParams(q); p.set('show', next.id)
+      setQ(p, { replace: true })
+    })
+    return () => { live = false }
+  }, [showId, id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (showId) booking.setShow(showId) }, [showId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const d = decideThree()
@@ -75,7 +91,11 @@ export default function SeatsPage() {
     setFocusSeat(seat)
   }
 
-  if (!showId) return <Container className="py-16"><ErrorCard message="No showtime picked." onRetry={() => nav(`/movie/${id}`)} /></Container>
+  if (!showId) return (
+    <Container className="min-h-[115svh] py-10">
+      {noShows ? <ErrorCard message="No bookable showtimes for this film." onRetry={() => nav(`/movie/${id}`)} /> : <Skeleton className="h-96" />}
+    </Container>
+  )
   if (map.error) return <Container className="py-16"><ErrorCard onRetry={map.retry} /></Container>
 
   const show = map.data?.show
