@@ -95,6 +95,9 @@ export default function SeatsPage() {
   }, [curtain, quick])
   useEffect(() => { if (curtain === 'closed' && (threeReady || lostNote)) { setProgress(100); setCurtain('opening') } }, [threeReady, lostNote, curtain])
   useEffect(() => { if (curtain === 'opening') performance.mark('lumen:curtain-open') }, [curtain])
+  // fix9: the prerendered static curtain (outside #root, see scripts/prerender.ts) goes once the real curtains are gone
+  useEffect(() => { if (curtain === 'gone') document.getElementById('seat-static')?.remove() }, [curtain])
+  useEffect(() => () => document.getElementById('seat-static')?.remove(), [])
   useEffect(() => { if (!sheetOpen && curtain === 'gone') peekRef.current?.focus({ preventScroll: true }) }, [sheetOpen, curtain])
   useEffect(() => { if (movie.data) document.title = `Choose seats · ${movie.data.title} [PH] | Lumen Cinema [PH]` }, [movie.data])
 

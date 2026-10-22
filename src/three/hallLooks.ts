@@ -30,14 +30,39 @@ export function makeHallLooks() {
   const floor = region(atlas, 0, 256), riser = region(atlas, 256, 384), wallL = region(atlas, 384, 448, true), wallR = region(atlas, 448, 512)
   const normal = canvasTex(256, 256, [['rgb(128,128,255)', 0, 256]])
   normal.wrapS = normal.wrapT = THREE.RepeatWrapping; normal.needsUpdate = true
+  // fix9: cross-fade flat -> baked, riding the 500 ms hall fade-in (designer). One uniform per material, blended in the
+  // map_fragment chunk; compiled once up front, so the blend costs no recompile. Reduced motion = instant.
+  const mix = { value: 0 }
+  function bake(flat: string) {
+    const uFlat = { value: new THREE.Color(flat) }
+    return {
+      customProgramCacheKey: () => 'lumen-bake',
+      onBeforeCompile: (sh: { uniforms: Record<string, unknown>; fragmentShader: string }) => {
+        sh.uniforms.uMix = mix; sh.uniforms.uFlat = uFlat
+        sh.fragmentShader = 'uniform float uMix;\nuniform vec3 uFlat;\n' + sh.fragmentShader.replace('#include <map_fragment>',
+          '#ifdef USE_MAP\n  vec4 sampledDiffuseColor = texture2D( map, vMapUv );\n  diffuseColor *= mix( vec4( uFlat, 1.0 ), sampledDiffuseColor, uMix );\n#endif')
+      },
+    }
+  }
+  let pending = 2, instant = false
+  const landed = () => {
+    if (--pending) return
+    performance.mark('lumen:hall-bake-blend-start')
+    if (instant) { mix.value = 1; performance.mark('lumen:hall-bake-blend-end'); return }
+    const t0 = performance.now()
+    const tick = () => { mix.value = Math.min(1, (performance.now() - t0) / 500); if (mix.value < 1) requestAnimationFrame(tick); else performance.mark('lumen:hall-bake-blend-end') }
+    requestAnimationFrame(tick)
+  }
   let loaded = false
-  function load() {
+  function load(reduce = false) {
+    instant = reduce
     if (loaded) return; loaded = true
     const L = new THREE.ImageLoader()
-    L.load(HALL_LIGHT_URL, (img) => { atlas.source.data = img; atlas.source.needsUpdate = true; performance.mark('lumen:hall-bake-applied') })
-    L.load(VELVET_NORMAL_URL, (img) => { normal.source.data = img; normal.source.needsUpdate = true; performance.mark('lumen:hall-normal-applied') })
+    // fix9: each clone must be flagged too; three re-uploads per texture version, not per shared Source (fix8 never showed the bake)
+    L.load(HALL_LIGHT_URL, (img) => { atlas.source.data = img; for (const t of [atlas, floor, riser, wallL, wallR]) t.needsUpdate = true; performance.mark('lumen:hall-bake-applied'); landed() })
+    L.load(VELVET_NORMAL_URL, (img) => { normal.source.data = img; normal.needsUpdate = true; performance.mark('lumen:hall-normal-applied'); landed() })
   }
-  return { floor, riser, wallL, wallR, normal, load }
+  return { floor, riser, wallL, wallR, normal, load, mix, bake }
 }
 export type HallLooks = ReturnType<typeof makeHallLooks>
 /** row brightness from the screen (prototype), baked into each riser's colour */

@@ -58,23 +58,27 @@ function eye(p: THREE.Vector3, phone = false) {
   // fix8 (BUILD-NOTES 3): on a portrait phone the seat-eye view was all screen and cropped the selected seats a few rows ahead.
   // Phone: eye a little higher/behind the seat and aimed lower, so rows ahead + the screen both fit (with the wider phone fov).
   if (phone) return { pos: new THREE.Vector3(p.x, p.y + 1.85, p.z + 0.35), look: new THREE.Vector3(p.x * 0.5, SCREEN.y - 1.9, SCREEN.z + 2) }
-  return { pos: new THREE.Vector3(p.x, p.y + 1.15, p.z + 0.05), look: SCREEN_CENTER.clone() }
+  // fix9 desktop: aim ~0.9 below the screen centre so the rows ahead sit above the 64px peek bar (+16px inset), screen still in frame
+  return { pos: new THREE.Vector3(p.x, p.y + 1.15, p.z + 0.05), look: new THREE.Vector3(0, SCREEN.y - 0.9, SCREEN.z) }
 }
 
 const TAKEN = new THREE.Color('#3A2A2E')
 /** §15 gold edge: back top rail + back sides + both arms, seat-local (seat origin = row floor). Body stays velvet. */
-function edgeGeometry(grow: number) {
+function edgeGeometry(grow: number, thin = false) {
+  // fix9 desktop (thin): seen from above the 5cm rail + glow read as a solid gold top. Thin = 2.5cm rail on the back's rear top edge
+  // (velvet stays visible in front of it) and thinner sides/arms.
+  const r = thin ? 0.025 : 0.05
   const parts = [
-    [0.54, 0.05, 0.05, 0, 1.03, 0.22],
-    [0.05, 0.62, 0.05, -0.27, 0.72, 0.29], [0.05, 0.62, 0.05, 0.27, 0.72, 0.29],
-    [0.05, 0.05, 0.5, -0.28, 0.5, 0.02], [0.05, 0.05, 0.5, 0.28, 0.5, 0.02],
+    thin ? [0.52, r, r, 0, 1.01, 0.3] : [0.54, 0.05, 0.05, 0, 1.03, 0.22],
+    [r, 0.62, r, -0.27, 0.72, 0.29], [r, 0.62, r, 0.27, 0.72, 0.29],
+    [r, r, 0.5, -0.28, 0.5, 0.02], [r, r, 0.5, 0.28, 0.5, 0.02],
   ].map(([w, h, d, x, y, z]) => new THREE.BoxGeometry(w * (w < 0.1 ? grow : 1), h * (h < 0.1 ? grow : 1), d * (d < 0.1 ? grow : 1)).translate(x, y, z))
   return mergeGeometries(parts)!
 }
 /** fix7: instanced seats, cushion + tilted back merged into one geometry.
  *  fix8 §15: free/selected/access seats = velvet (physical: roughness 0.8, sheen at grazing angles = top edges, 256px fabric normal);
  *  taken seats = a second instanced mesh, muted #3A2A2E, no sheen, no normal. Selected = gold edge + soft glow, 1.5s pulse. */
-function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, still }: Pick<HallSceneProps, 'hall' | 'taken' | 'selected' | 'hovered' | 'onPick' | 'onHover'> & { looks: HallLooks; low: boolean; still: boolean }) {
+function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, still, phone }: Pick<HallSceneProps, 'hall' | 'taken' | 'selected' | 'hovered' | 'onPick' | 'onHover' | 'phone'> & { looks: HallLooks; low: boolean; still: boolean }) {
   const items = useMemo(() => layout(hall), [hall])
   const open = useMemo(() => items.filter((i) => !taken.has(i.seat.id)), [items, taken])
   const shut = useMemo(() => items.filter((i) => taken.has(i.seat.id)), [items, taken])
@@ -89,7 +93,7 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, st
     cushion.dispose(); back.dispose()
     return g
   }, [])
-  const edgeGeo = useMemo(() => edgeGeometry(1), []), glowGeo = useMemo(() => edgeGeometry(2.6), [])
+  const edgeGeo = useMemo(() => edgeGeometry(1, !phone), [phone]), glowGeo = useMemo(() => edgeGeometry(phone ? 2.6 : 1.8, !phone), [phone])
   const tmp = useMemo(() => new THREE.Object3D(), [])
   const MAXSEL = 8
 
@@ -120,7 +124,8 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, st
   useFrame(({ clock }) => {
     const k = still ? 1 : 0.85 + 0.15 * Math.cos(clock.elapsedTime * (2 * Math.PI / 1.5))
     if (edgeMat.current) edgeMat.current.opacity = k
-    if (glowMat.current) glowMat.current.opacity = 0.22 * k
+    if (velvet.current && !low) velvet.current.normalScale.setScalar(0.8 * looks.mix.value) // normal map fades in with the bake
+    if (glowMat.current) glowMat.current.opacity = (phone ? 0.22 : 0.14) * k
   })
 
   const handle = (list: typeof items) => (e: ThreeEvent<PointerEvent | MouseEvent>, kind: 'move' | 'click') => {
@@ -157,6 +162,8 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, st
 }
 
 function Room({ hall, looks }: { hall: Hall; looks: HallLooks }) {
+  // flat = the pre-bake colours (fix7/8 look); the bake cross-fades in over them
+  const bakeFloor = useMemo(() => looks.bake('#121218'), [looks]), bakeRiser = useMemo(() => looks.bake('#ffffff'), [looks]), bakeWall = useMemo(() => looks.bake('#17131a'), [looks])
   const rows = hall.rows.length
   const width = hall.columns * SPACING_X + 3
   const screenTex = useMemo(() => {
@@ -179,18 +186,18 @@ function Room({ hall, looks }: { hall: Hall; looks: HallLooks }) {
   return (
     <group>
       {/* floor + stepped risers */}
-      <mesh rotation-x={-Math.PI / 2} position={[0, -0.01, 8]}><planeGeometry args={[width + 2, 30]} /><meshBasicMaterial map={looks.floor} /></mesh>
+      <mesh rotation-x={-Math.PI / 2} position={[0, -0.01, 8]}><planeGeometry args={[width + 2, 30]} /><meshBasicMaterial map={looks.floor} toneMapped={false} {...bakeFloor} /></mesh>
       {hall.rows.map((_, ri) => (
         <mesh key={ri} position={[0, ri * ROW_RISE / 2, FIRST_ROW_Z + ri * ROW_DEPTH + 0.1]}>
           <boxGeometry args={[width, ri * ROW_RISE + 0.01, ROW_DEPTH]} />
           {/* §15 baked: AO band x per-row screen falloff (unlit) */}
-          <meshBasicMaterial map={looks.riser} color={new THREE.Color('#5a3a3c').multiplyScalar(rowGlow(ri))} />
+          <meshBasicMaterial map={looks.riser} color={new THREE.Color('#5a3a3c').multiplyScalar(rowGlow(ri))} toneMapped={false} {...bakeRiser} />
         </mesh>
       ))}
       {/* side walls with step lights */}
       {[-1, 1].map((s) => (
         <group key={s}>
-          <mesh position={[s * (width / 2 + 0.6), 3, 8]} rotation-y={-s * Math.PI / 2}><planeGeometry args={[30, 8]} /><meshBasicMaterial map={s < 0 ? looks.wallL : looks.wallR} side={THREE.DoubleSide} /></mesh>
+          <mesh position={[s * (width / 2 + 0.6), 3, 8]} rotation-y={-s * Math.PI / 2}><planeGeometry args={[30, 8]} /><meshBasicMaterial map={s < 0 ? looks.wallL : looks.wallR} side={THREE.DoubleSide} toneMapped={false} {...bakeWall} /></mesh>
           {hall.rows.map((_, ri) => (
             <mesh key={ri} position={[s * (width / 2 + 0.55), ri * ROW_RISE + 0.25, FIRST_ROW_Z + ri * ROW_DEPTH]}>
               <boxGeometry args={[0.05, 0.08, 0.3]} /><meshBasicMaterial color="#F2B544" />
@@ -333,7 +340,7 @@ function FpsGuard({ onSlow, forceSlow }: { onSlow: () => void; forceSlow?: boole
 export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; fpsGuard?: boolean; fpsForceSlow?: boolean; onStillSlow?: () => void; paused?: boolean; applyLooks?: boolean }) {
   // §15 textures: placeholders now, real webp files fetched once the curtains are gone
   const looks = useMemo(() => makeHallLooks(), [])
-  useEffect(() => { if (p.applyLooks) looks.load() }, [p.applyLooks, looks])
+  useEffect(() => { if (p.applyLooks) looks.load(p.instant) }, [p.applyLooks, looks, p.instant])
   const maxDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2)
   const [dpr, setDpr] = useState(maxDpr)
   // §14 stage 0: full quality; 1: quality dropped IN PLACE (DPR 1 -> 0.75 on hi-dpi phones, no adaptive incline,
