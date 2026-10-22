@@ -124,7 +124,8 @@ function dayKey(d: Date) {
 }
 
 const TIMES = ['13:30', '16:00', '18:45', '21:15']
-const PRICE: Record<z.infer<typeof ShowFormat>, number> = { '2D': 9, '3D': 12, IMAX: 15 }
+// fix13: no IMAX surcharge (back end: flat adult 1200 cents); the UI reads show.price from the response
+const PRICE: Record<z.infer<typeof ShowFormat>, number> = { '2D': 9, '3D': 12, IMAX: 12 }
 function buildShows(): Show[] {
   const today = new Date()
   today.setHours(0, 0, 0, 0)

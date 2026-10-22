@@ -122,12 +122,35 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
     if (pv) { tmp.position.set(pv.pos.x, pv.pos.y, pv.pos.z); tmp.updateMatrix(); previewEdge.current!.setMatrixAt(0, tmp.matrix) }
     previewEdge.current!.count = pv ? 1 : 0; previewEdge.current!.instanceMatrix.needsUpdate = true
   }, [items, open, shut, taken, selected, hovered, preview, tmp])
-  // QA hook: screen position (CSS px) of a seat, so tests can tap real seats through the raycaster
   const { camera: cam, size } = useThree()
+    // fix13 hit test: return a screen point where a tap really lands on THIS seat (raycast-verified against both seat meshes);
+  // the old single cushion point was often hidden by the row nearer the camera, so taps there opened the neighbour.
   useEffect(() => {
     const w = window as Window & { __lumenSeatXY?: (id: string) => { x: number; y: number } | null }
-    w.__lumenSeatXY = (id) => { const it = items.find((i) => i.seat.id === id); if (!it) return null; const v = new THREE.Vector3(it.pos.x, it.pos.y + 0.45, it.pos.z).project(cam); return { x: (v.x + 1) / 2 * size.width, y: (1 - v.y) / 2 * size.height } }
-  }, [items, cam, size])
+    const rc = new THREE.Raycaster()
+    w.__lumenSeatXY = (id) => {
+      const it = items.find((i) => i.seat.id === id); if (!it) return null
+      const isOpen = !taken.has(id), list = isOpen ? open : shut, m = isOpen ? mesh.current : takenMesh.current
+      if (!m) return null
+      let fallback: { x: number; y: number } | null = null
+      for (const [dx, dy, dz] of [[0, 0.95, 0.24], [0, 0.75, 0.27], [0, 0.44, 0], [0, 0.44, -0.2], [-0.15, 0.9, 0.24], [0.15, 0.9, 0.24], [0, 1.0, 0.3]]) {
+        const v = new THREE.Vector3(it.pos.x + dx, it.pos.y + dy, it.pos.z + dz).project(cam)
+        if (v.z > 1 || Math.abs(v.x) > 1 || Math.abs(v.y) > 1) continue
+        const at = (nx: number, ny: number) => {
+          rc.setFromCamera(new THREE.Vector2(nx, ny), cam)
+          const hit = rc.intersectObjects([mesh.current!, takenMesh.current!], false)[0]
+          return hit?.instanceId != null ? (hit.object === mesh.current ? open : shut)[hit.instanceId]?.seat.id : undefined
+        }
+        if (at(v.x, v.y) !== id) continue
+        // a finger is not a pixel: keep the point only if it is 4px clear of the neighbouring seats (fallback below)
+        const ex = 8 / size.width, ey = 8 / size.height
+        const xy = { x: (v.x + 1) / 2 * size.width, y: (1 - v.y) / 2 * size.height }
+        if ([[ex, 0], [-ex, 0], [0, ey], [0, -ey]].every(([a, b]) => at(v.x + a, v.y + b) === id)) return xy
+        fallback ??= xy
+      }
+      void list; return fallback
+    }
+  }, [items, open, shut, taken, cam, size])
 
   // §14 in-place quality drop also drops sheen + normal map (one recompile, at the drop only)
   useEffect(() => { const v = velvet.current; if (!v || !low) return; v.sheen = 0; v.normalMap = null; v.needsUpdate = true }, [low])
@@ -266,7 +289,9 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallScene
   }, [focusSeat])
   useEffect(() => {
     if (resetKey === 0) return
-    go(overview(hall))
+    // fix13 §15.z rev 5: in the seat view, Reset view returns to that seat's default angle; otherwise to the overview
+    const item = focusSeat ? items.find((i) => i.seat.id === focusSeat.id) : undefined
+    go(item ? eye(item.pos, phone) : overview(hall))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey])
 
@@ -293,7 +318,7 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallScene
 
   useFrame((_, dt) => {
     if (t.current < 1) {
-      // fix12: 400ms ease-out glide (enter seat view, Change seats, Reset view); instant under reduced motion (see go())
+      // fix12/13: 400ms ease-out glide (tap -> seat view, Back to overview, Reset view); instant under reduced motion (see go())
       if (t0.current < 0) t0.current = performance.now()
       t.current = Math.min(1, (performance.now() - t0.current) / 400)
       const k = 1 - (1 - t.current) ** 3 // ease-out cubic

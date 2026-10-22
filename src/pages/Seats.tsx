@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, Component, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ArrowLeft, Box, ChevronLeft, ChevronRight, LayoutGrid, RotateCcw, Users, X } from 'lucide-react'
+import { ArrowLeft, Box, ChevronLeft, ChevronRight, LayoutGrid, RotateCcw, Users } from 'lucide-react'
 import { createHold, getMovie, getSeatMap, listShows, MAX_SEATS, SeatTakenError, type Seat } from '@/lib/api'
 import { rangeLabel } from '@/lib/group-label'
 // fix12 (TBT): group placement maths load lazily, on the first tap / hover on the map or 3D preview, never at startup
@@ -62,9 +62,9 @@ export default function SeatsPage() {
   const [extraTaken, setExtraTaken] = useState<string[]>([]) // SEAT_TAKEN at Continue
   const [mapKey, setMapKey] = useState(0)
   const [holding, setHolding] = useState(false)
-  // fix12 §15.z: a 3D tap only previews one seat (never selects); 2D map is the only place that selects
-  const [preview3D, setPreview3D] = useState<Seat | null>(null)
-  const [hint3D, setHint3D] = useState<string | null>(null)
+  // fix13 §15.z rev 5: a 3D tap flies to that seat's point of view (focusSeat) and never selects; only "Add seat" selects
+  const ignorePop = useRef(false)
+  const pushedView = useRef(false) // a history entry was pushed when entering the seat view (browser back = Back to overview)
   const [hover2D, setHover2D] = useState<Seat | null>(null)
   const [G, setG] = useState<GroupLib | null>(groupLib)
   const leaving3D = useRef(false) // unmounting the canvas on a switch to Simple fires webglcontextlost; that is not a failure
@@ -122,12 +122,7 @@ export default function SeatsPage() {
   // fix9: the prerendered static curtain (outside #root, see scripts/prerender.ts) goes once the real curtains are gone
   useEffect(() => { if (curtain === 'gone') document.getElementById('seat-static')?.remove() }, [curtain])
   useEffect(() => () => document.getElementById('seat-static')?.remove(), [])
-  // fix12 (SEO LCP): curtains stay plain #7A1F2B until the real content (title overlay) has painted, then the velvet tile goes on
-  useEffect(() => {
-    const h = document.documentElement; if (h.classList.contains('no3d')) return
-    let r2 = 0; const r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => h.classList.add('curtains-on')) })
-    return () => { cancelAnimationFrame(r1); cancelAnimationFrame(r2) }
-  }, [])
+  // fix13 (SEO LCP): the curtain (.velvet-static) stays flat #7A1F2B for the whole load; the velvet tile painted late and became the LCP element
   useEffect(() => { if (!sheetOpen && curtain === 'gone') peekRef.current?.focus({ preventScroll: true }) }, [sheetOpen, curtain])
   useEffect(() => { if (movie.data) document.title = `Choose seats · ${movie.data.title} [PH] | Lumen Cinema [PH]` }, [movie.data])
 
@@ -178,7 +173,7 @@ export default function SeatsPage() {
     if (!g.ids.length) { // wheelchair space in group mode: never auto-included
       setShortK(0); setSay('Wheelchair spaces are picked one at a time. Choose Split the group [PH]'); return
     }
-    booking.setSeats(g.ids); setPreview3D(null)
+    booking.setSeats(g.ids)
     if (g.short) { setShortK(g.ids.length); setSay(`Only ${g.ids.length} seat${g.ids.length === 1 ? '' : 's'} together here [PH]`) }
     else { setShortK(null); announce(g.ids) }
     // §11.4: the sheet collapses to the peek bar after a full pick; fix12: it stays open on a short run (Find/Split panel is 2D-only)
@@ -194,7 +189,7 @@ export default function SeatsPage() {
   }
   // fix12: map back to fit only; the camera never re-centres automatically (Reset view is the only way back)
   function toFit() { resetSeatMapZoom(); setMapKey((k) => k + 1) }
-  function clearPicks() { booking.releaseHold(); booking.setSeats([]); setPreview3D(null); setSplit(false); setShortK(null); setLimitMsg(false); toFit() }
+  function clearPicks() { booking.releaseHold(); booking.setSeats([]); setSplit(false); setShortK(null); setLimitMsg(false); toFit() }
   function changeSeats() { clearPicks(); setSay('Pick a seat for your group [PH]'); setSheetOpen(true) }
   function findTogether() {
     clearPicks(); setSheetOpen(true)
@@ -202,36 +197,58 @@ export default function SeatsPage() {
     setSay(rows.size ? `Rows ${[...rows].join(', ')} have ${party} seats together [PH]` : `No ${party} seats together for this show [PH]`)
   }
   function startSplit() { setSplit(true); setShortK(null); setSay(`${selected.length} of ${party} picked. Tap to add the rest one at a time [PH]`); setSheetOpen(true) }
-  /** fix12 §15.z: 3D tap = preview one seat. Camera stays. Taken / wheelchair = inline hint, no outline. */
-  function preview(seat: Seat) {
-    setHint3D(null)
-    if (taken.has(seat.id)) { setHint3D('Taken [PH]'); setTimeout(() => setHint3D(null), 3000); return }
-    if (seat.type === 'access') { setHint3D('Wheelchair space, needs a Disability ticket [PH]'); setTimeout(() => setHint3D(null), 3000); return }
-    if (preview3D?.id === seat.id) { setPreview3D(null); setSay('Preview cleared [PH]'); return }
-    needG(); setPreview3D(seat); setSay(`Previewing ${seat.id}. Press ${party === 1 ? 'Continue to select' : 'Use this seat'}. [PH]`)
+  /** fix13 §15.z rev 5: 3D tap = fly to that seat's view (400ms ease-out, instant under reduced motion). Nothing is selected.
+   *  Taken / wheelchair seats can be viewed too; Add seat is then disabled with the reason. */
+  function viewSeat(seat: Seat) {
+    needG()
+    if (!focusSeat && !pushedView.current) { history.pushState({ ...history.state, lumenSeatView: true }, ''); pushedView.current = true }
+    setFocusSeat(seat); setSay(`Viewing from ${seat.id}. Press Add seat to select. [PH]`)
   }
-  /** party >= 2: place the group around the previewed seat (§15.y) and switch to the 2D map */
-  function useThisSeat() {
-    const s = preview3D; if (!s || !map.data) return
-    setPreview3D(null); setSplit(false); booking.releaseHold()
-    if (!G) { void loadGroup().then(setG); return }
-    const g = G.placeGroup(map.data.hall, s, party, taken)
-    booking.setSeats(g.ids)
-    if (g.short) { setShortK(g.ids.length); setSay(`Only ${g.ids.length} seat${g.ids.length === 1 ? '' : 's'} together here [PH]`) } else { setShortK(null); announce(g.ids) }
-    setSheetOpen(true)
+  /** Back to overview (button, Esc, browser back): glide to the overview, nothing selected */
+  function exitView(fromPop = false) {
+    if (!focusSeat) return
+    // fix13: drop our history entry and exit right away; the popstate this causes is ignored (a second Back/Esc can never leave the page)
+    if (!fromPop && pushedView.current) { ignorePop.current = true; history.back() }
+    pushedView.current = false
+    setFocusSeat(null); setResetKey((k) => k + 1); setSay('Overview [PH]')
+  }
+  useEffect(() => {
+    const pop = () => { if (ignorePop.current) { ignorePop.current = false; return } if (pushedView.current) { pushedView.current = false; setFocusSeat(null); setResetKey((k) => k + 1); setSay('Overview [PH]') } }
+    window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop)
+  }, [])
+  useEffect(() => {
+    if (!focusSeat || sheetOpen) return
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); exitView() } }
+    window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key)
+  }) // eslint-disable-line react-hooks/exhaustive-deps
+  // back end correction: only taken seats block Add seat; access seats (J1, J2, J15, J16) stay addable with a hint
+  const viewBlock = focusSeat && taken.has(focusSeat.id) ? 'Taken [PH]' : null
+  const viewHint = focusSeat && !viewBlock && focusSeat.type === 'access' ? 'Needs a Disability ticket [PH]' : null
+  /** the only way a 3D seat gets selected. party 1: select it ("F9 selected" + Continue). party >= 2: place the group (§15.y), open the 2D map. */
+  function addSeat() {
+    const s = focusSeat; if (!s || !map.data || viewBlock) return
+    booking.releaseHold(); setSplit(false)
+    if (party === 1) { booking.setSeats([s.id]); setShortK(null); setSay(`${s.id} selected. Press Continue. [PH]`); return }
+    const run = (G: GroupLib) => {
+      const g = G.placeGroup(map.data!.hall, s, party, taken)
+      if (!g.ids.length) { booking.setSeats([s.id]); setSplit(true); setShortK(null); setSay(`${s.id} added. Wheelchair spaces are picked one at a time, tap to add the rest [PH]`); setSheetOpen(true); return }
+      booking.setSeats(g.ids)
+      if (g.short) { setShortK(g.ids.length); setSay(`Only ${g.ids.length} seat${g.ids.length === 1 ? '' : 's'} together here [PH]`) } else { setShortK(null); announce(g.ids) }
+      setSheetOpen(true)
+    }
+    if (G) run(G); else void loadGroup().then((m) => { setG(m); run(m) })
   }
   async function goContinue() {
-    const ids = preview3D && party === 1 ? [preview3D.id] : selected // party of 1: Continue selects the previewed seat
+    const ids = selected
     if (ids.length !== party || holding) return
     setHolding(true)
     try {
-      if (ids !== selected) booking.setSeats(ids)
       const h = await createHold(showId, ids); booking.setHold(h.id, h.holdExpiresAt); nav('/booking')
     } catch (e) {
       if (e instanceof SeatTakenError) {
         const lost = e.seatIds
         toast(lost.length === 1 ? `${lost[0]} was just taken, pick another [PH]` : `${lost.slice(0, -1).join(', ')} and ${lost[lost.length - 1]} were just taken [PH]`, { duration: 6000, closeButton: true })
-        setExtraTaken((x) => [...x, ...lost]); booking.setSeats([]); setPreview3D(null); setSplit(false); setShortK(null) // camera stays on that row
+        setExtraTaken((x) => [...x, ...lost]); booking.setSeats([]); setSplit(false); setShortK(null) // camera stays on that row
         setSay(`${lost.join(', ')} just taken, pick again [PH]`)
       } else toast("Couldn't reach the cinema, try again [PH]")
     } finally { setHolding(false) }
@@ -257,7 +274,7 @@ export default function SeatsPage() {
   /** fix12 §15.w: switch keeps party, picks and hold; flips ?simple=1 with replaceState; persists (lumen.simple); never locks into Simple */
   function setView(v: '3d' | 'simple') {
     const u = new URL(location.href)
-    if (v === 'simple') { leaving3D.current = true; localStorage.setItem('lumen.simple', '1'); u.searchParams.set('simple', '1'); setPreview3D(null); setThreeOn(false) } // 3D preview is not a pick
+    if (v === 'simple') { leaving3D.current = true; localStorage.setItem('lumen.simple', '1'); u.searchParams.set('simple', '1'); setThreeOn(false) }
     else {
       localStorage.removeItem('lumen.simple'); u.searchParams.delete('simple'); sessionStorage.removeItem('lumen.slowtoast') // fps toast may show again
       leaving3D.current = false; setLostNote(null); setThreeOn(true)
@@ -300,7 +317,7 @@ export default function SeatsPage() {
             <GLBoundary onError={() => setLostNote('3D view unavailable, showing simple view')}>
               <Suspense fallback={null}>
                                   <HallScene3D hall={map.data.hall} taken={taken} selected={selected} focusSeat={focusSeat} hovered={hovered}
-                    preview={preview3D} onPick={preview} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
+                    preview={focusSeat} onPick={viewSeat} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
                     onContextLost={() => { if (!leaving3D.current) setLostNote('3D view paused, showing simple view') }}
                   paused={curtain === 'opening'} applyLooks={curtain === 'gone'} fpsGuard={fpsGuard} fpsForceSlow={fpsSlow} onStillSlow={slowToast}
                   onReady={() => { performance.mark('lumen:hall-ready'); setThreeReady(true) }} />
@@ -317,13 +334,15 @@ export default function SeatsPage() {
 
       {/* top bar (after curtains) */}
       <div className={cn('absolute inset-x-0 top-0 z-[45] flex h-14 items-center gap-2 bg-gradient-to-b from-black/70 px-3 transition-opacity duration-200', curtainsUp ? 'opacity-0' : 'opacity-100')}>
-        <Link to={`/movie/${id}`} aria-label="Back to showtimes" className={iconBtn}><ArrowLeft className="size-4" aria-hidden /></Link>
+        {focusSeat && threeOn && !lostNote
+          ? <button type="button" data-back-overview onClick={() => exitView()} aria-label="Back to overview" className={cn(iconBtn, 'w-auto px-3 text-sm')}><ChevronLeft className="size-4" aria-hidden /><span className="hidden sm:inline">Back to overview</span><span className="sm:hidden">Back</span></button>
+          : <Link to={`/movie/${id}`} aria-label="Back to showtimes" className={iconBtn}><ArrowLeft className="size-4" aria-hidden /></Link>}
         <div className="min-w-0 flex-1">
           {!curtainsUp && <h1 className="truncate font-display text-xl uppercase leading-tight tracking-wide md:text-2xl">{titleText}</h1>}
           <p className="truncate text-xs text-text-muted">{showLine}</p>
         </div>
         {threeOn && threeReady && !lostNote && (
-          <button onClick={() => { setFocusSeat(null); setResetKey((k) => k + 1) }} aria-label="Reset view" className={iconBtn}>
+          <button onClick={() => setResetKey((k) => k + 1)} aria-label="Reset view" title={focusSeat ? `Back to ${focusSeat.id}'s default angle` : undefined} className={iconBtn}>
             <RotateCcw className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Reset view</span>
           </button>
         )}
@@ -382,10 +401,18 @@ export default function SeatsPage() {
           </fieldset>
         ) : !map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-10 sm:h-6" />)}</div> : (
           <>
+            {/* fix13 designer ruling: sheet open + 3D seat view -> the sheet's top row is the peek content (no second bar) */}
+            {focusSeat && threeOn && !lostNote && !(party === 1 && selected.includes(focusSeat.id)) && (
+              <div data-sheet-seatview={focusSeat.id} className="mb-3 flex items-center gap-2 rounded-2xl bg-surface-2 p-2 pl-3 ring-1 ring-border">
+                <p className="min-w-0 flex-1 text-sm leading-tight"><span className="block truncate font-semibold">Seat {focusSeat.id} · Row {focusSeat.row} · {eur(price)} [PH]</span>
+                  {viewHint && <span className="block truncate text-xs text-text-muted">{viewHint}</span>}</p>
+                <Button className="min-h-11 shrink-0" disabled={!!viewBlock} onClick={addSeat}>{viewBlock ?? (party === 1 ? 'Add seat' : 'Add seat & place group')}</Button>
+              </div>
+            )}
             <div className="mb-3 flex items-center justify-between gap-2">
-              <button type="button" data-party-chip onClick={() => { clearPicks(); setPartyStep(true) }} aria-label={`${party} ${party === 1 ? 'person' : 'people'}, change group size`}
+              <button type="button" data-party-chip onClick={() => { clearPicks(); setPartyStep(true) }} 
                 className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-surface-2 px-4 text-sm ring-1 ring-border hover:bg-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-                <Users className="size-4" aria-hidden /> {party} {party === 1 ? 'person' : 'people'} [PH]
+                <Users className="size-4" aria-hidden /> {party} {party === 1 ? 'person' : 'people'} [PH]<span className="sr-only">, change group size</span>
               </button>
               {!selected.length && <p data-pick-prompt className="text-sm text-text-muted">Pick a seat for your group [PH]</p>}
               {split && selected.length < party && <p className="text-sm text-text-muted">{selected.length} of {party} picked [PH]</p>}
@@ -400,17 +427,14 @@ export default function SeatsPage() {
         )}
       </SeatSheet>
       {/* peek bar: sheet collapsed, never fully hidden. Reserved h-16, fixed bottom. */}
-      {!sheetOpen && !curtainsUp && hint3D && <p data-hint3d role="status" className="fixed inset-x-3 bottom-[4.5rem] z-[56] rounded-xl bg-surface-2 px-3 py-2 text-sm ring-1 ring-border md:inset-x-auto md:right-4 md:bottom-24 md:w-[min(480px,40vw)]">{hint3D}</p>}
-      {!sheetOpen && !curtainsUp && (!partyStep || preview3D) && (
+      {!sheetOpen && !curtainsUp && (!partyStep || focusSeat) && (
         <div className="fixed inset-x-0 bottom-0 z-[55] flex h-16 items-center gap-2 border-t border-border bg-surface/95 px-3 backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:w-[min(480px,40vw)] md:rounded-2xl md:ring-1 md:ring-border">
-          {preview3D ? <>
-            <button ref={peekRef} data-previewing onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 text-left text-sm leading-tight" aria-label={`Previewing ${preview3D.id}. Open seat picker`}>
-              <span className="block truncate font-semibold">Previewing {preview3D.id}</span><span className="block truncate text-xs text-text-muted">{eur(price)} [PH]</span>
+          {focusSeat && threeOn && !lostNote && !(party === 1 && selected.includes(focusSeat.id)) ? <>
+            <button ref={peekRef} data-seatview={focusSeat.id} onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 text-left text-sm leading-tight" aria-label={`Seat ${focusSeat.id}, row ${focusSeat.row}, ${eur(price)}. Open seat picker`}>
+              <span className="block truncate font-semibold">Seat {focusSeat.id} · Row {focusSeat.row} · {eur(price)} [PH]</span>
+              {viewHint && <span data-seat-hint className="block truncate text-xs text-text-muted">{viewHint}</span>}
             </button>
-            <button type="button" onClick={() => { setPreview3D(null); setSay('Preview cleared [PH]') }} aria-label={`Clear preview of ${preview3D.id}`} className="grid size-11 shrink-0 place-items-center rounded-full ring-1 ring-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><X className="size-5" aria-hidden /></button>
-            {party === 1
-              ? <Button className="min-h-11" disabled={holding} onClick={goContinue}>Continue</Button>
-              : <Button className="min-h-11" onClick={useThisSeat}>Use this seat [PH]</Button>}
+            <Button data-add-seat className="min-h-11 shrink-0" disabled={!!viewBlock} onClick={addSeat}>{viewBlock ? <span data-block-reason>{viewBlock}</span> : party === 1 ? 'Add seat' : 'Add seat & place group'}</Button>
           </> : <>
             <button ref={peekRef} onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 text-left text-sm leading-tight" aria-label={`Selected: ${seatLabel}. Open seat picker`}>
               <span className="block truncate font-semibold">{peekTop}</span><span className="block truncate text-xs text-text-muted">{peekSub}</span>
