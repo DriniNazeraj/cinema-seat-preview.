@@ -8,6 +8,7 @@ import {
   CreateHoldBodySchema,
   ERROR_MESSAGE,
   GetMovieResponseSchema,
+  HealthResponseSchema,
   GetSeatMapResponseSchema,
   GetShowResponseSchema,
   HoldResponseSchema,
@@ -20,7 +21,7 @@ import {
 } from './contract.ts'
 import { getMovie, getSeatMap, getShow, listMovies, listShows } from './catalog.ts'
 import { confirmBooking, createBooking, readBooking } from './bookings.ts'
-import { withTransaction } from './db.ts'
+import { pool, withTransaction } from './db.ts'
 import { ApiException, isBodyTooLarge, isJsonParseError, sendError } from './errors.ts'
 import { asyncHandler, CATALOG_CACHE, NO_STORE, sendJson, sendOk } from './http.ts'
 import { BOOKING_ROUTE, HOLD_ROUTE, requestHash, runIdempotent } from './idempotency.ts'
@@ -46,9 +47,8 @@ function isResponseSchemaError(err: unknown): err is { issues: unknown[] } {
 
 export function createApp() {
   const app = express()
-  // Hop count, not `true`, so the rate limiter can use the proxy's client address
-  // without accepting an arbitrary forwarded chain from the open internet.
-  app.set('trust proxy', 1)
+  // Number of hops, never `true`. 0 means req.ip is the socket address.
+  app.set('trust proxy', config.trustProxy)
   app.set('etag', false)
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }))
   app.use(
@@ -61,6 +61,20 @@ export function createApp() {
     }),
   )
   app.use(express.json({ limit: '32kb' }))
+
+  app.get(
+    '/api/health',
+    asyncHandler(async (_req, res) => {
+      try {
+        await pool.query('SELECT 1')
+      } catch (err) {
+        console.error(`health check failed: ${safeMessage(err)}`)
+        sendError(res, new ApiException('UNAVAILABLE'))
+        return
+      }
+      sendOk(res, 200, HealthResponseSchema, { status: 'ok', db: 'ok' }, NO_STORE)
+    }),
+  )
 
   const holdCreateLimit = makeLimiter(RATE_LIMITS.holdCreate.limit, RATE_LIMITS.holdCreate.windowMs)
   const holdRefreshLimit = makeLimiter(RATE_LIMITS.holdRefresh.limit, RATE_LIMITS.holdRefresh.windowMs)
@@ -208,7 +222,7 @@ export function createApp() {
       return
     }
     if (isBodyTooLarge(err)) {
-      sendError(res, new ApiException('VALIDATION_ERROR', { fields: { body: 'Request body is too large.' } }))
+      sendError(res, new ApiException('PAYLOAD_TOO_LARGE'))
       return
     }
     if (isResponseSchemaError(err)) {

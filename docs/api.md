@@ -55,8 +55,23 @@ There is no senior ticket.
 | `CINEMA_TZ` | `Europe/Berlin` | Date filter and any server-side calendar day. |
 | `CORS_ORIGIN` | front-end origin | `cors` allow-list. No cookies. |
 | `PORT` | process default | HTTP port. |
+| `TRUST_PROXY` | `0` | Hop count for `req.ip`. `0` trusts none, so the rate limit uses the socket address and ignores a client-supplied `X-Forwarded-For`. Set it to the number of proxies in front of the process when hosted. |
 
 `HOLD_SECONDS` must be a positive integer. Clients do not assume 600 seconds; they read `holdExpiresAt`.
+
+## Health
+
+### `GET /api/health`
+
+Not rate limited. `Cache-Control: no-store`. Runs `SELECT 1`.
+
+`200`
+
+```json
+{ "ok": true, "data": { "status": "ok", "db": "ok" } }
+```
+
+Database unreachable: `503` `UNAVAILABLE`.
 
 ## Reads
 
@@ -364,13 +379,15 @@ Already confirmed: `200` with the confirmed booking. Expired hold: `409` `HOLD_E
 | `BOOKING_NOT_CONFIRMABLE` | 409 | Confirm cannot move this booking to `confirmed`. |
 | `CONFLICT` | 409 | Same hold booked again with a different body, or an unexpected unique violation. |
 | `RATE_LIMITED` | 429 | Hold or booking limiter. |
+| `PAYLOAD_TOO_LARGE` | 413 | JSON body is larger than 32 KiB. |
+| `UNAVAILABLE` | 503 | `GET /api/health` could not reach the database. |
 | `INTERNAL` | 500 | Unexpected failure. No stack trace in the body. |
 
 Codes are uppercase. The status map is `ERROR_STATUS` in `src/lib/api-contract.ts`.
 
 ## Rate limits
 
-`express-rate-limit`, one limiter per row, keyed by client IP. Behind a proxy, trust the proxy so the limit is not a single shared address.
+`express-rate-limit`, one limiter per row, keyed by `req.ip`. `TRUST_PROXY` is the hop count (default `0`). At `0` the socket address is the client, so a spoofed `X-Forwarded-For` does not open a new bucket. Set it to the number of proxies in front of the process when hosted. Do not set it to `true`.
 
 | route | limit | window |
 |---|---:|---|
@@ -382,7 +399,7 @@ Codes are uppercase. The status map is `ERROR_STATUS` in `src/lib/api-contract.t
 
 The limited response is the JSON envelope with `RATE_LIMITED`, not the package's default text body. Also send `Retry-After` (seconds) and draft-7 `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`.
 
-Catalogue `GET`s are outside these limiters.
+Catalogue `GET`s and `GET /api/health` are outside these limiters. JSON bodies larger than 32 KiB are `413` `PAYLOAD_TOO_LARGE`, not `400`.
 
 ## Idempotency
 

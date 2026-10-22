@@ -46,6 +46,20 @@ function cinemaTz(): string {
   return zone
 }
 
+/** Hop count. 0 trusts no proxy, so req.ip is the socket address. */
+function trustProxy(): number {
+  const raw = process.env.TRUST_PROXY
+  if (raw === undefined || raw.trim() === '') return 0
+  if (!/^\d+$/.test(raw.trim())) {
+    throw new Error('TRUST_PROXY must be a non-negative integer hop count')
+  }
+  const value = Number(raw.trim())
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error('TRUST_PROXY must be a non-negative integer hop count')
+  }
+  return value
+}
+
 function corsOrigins(): string[] {
   const raw = process.env.CORS_ORIGIN?.trim() || 'http://localhost:5173'
   const origins = raw.split(',').map((origin) => origin.trim()).filter(Boolean)
@@ -59,6 +73,7 @@ export const config = {
   corsOrigins: corsOrigins(),
   cinemaTz: cinemaTz(),
   holdSeconds: holdSeconds(),
+  trustProxy: trustProxy(),
 }
 
 export const serverDir = serverRoot

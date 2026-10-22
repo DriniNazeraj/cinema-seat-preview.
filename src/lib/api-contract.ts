@@ -355,6 +355,8 @@ export const ERROR_CODES = [
   'BOOKING_NOT_CONFIRMABLE',
   'CONFLICT',
   'RATE_LIMITED',
+  'PAYLOAD_TOO_LARGE',
+  'UNAVAILABLE',
   'INTERNAL',
 ] as const
 export type ErrorCode = (typeof ERROR_CODES)[number]
@@ -371,6 +373,8 @@ export const ERROR_STATUS = {
   BOOKING_NOT_CONFIRMABLE: 409,
   CONFLICT: 409,
   RATE_LIMITED: 429,
+  PAYLOAD_TOO_LARGE: 413,
+  UNAVAILABLE: 503,
   INTERNAL: 500,
 } as const satisfies Record<ErrorCode, number>
 
@@ -391,6 +395,8 @@ export const ERROR_MESSAGE: Record<ErrorCode, string> = {
   BOOKING_NOT_CONFIRMABLE: 'This booking can no longer be confirmed.',
   CONFLICT: 'That request conflicts with the current booking.',
   RATE_LIMITED: 'Too many requests. Try again shortly.',
+  PAYLOAD_TOO_LARGE: 'Request body is too large.',
+  UNAVAILABLE: 'Service unavailable.',
   INTERNAL: 'Something went wrong.',
 }
 
@@ -423,6 +429,8 @@ export const ApiErrorSchema = z.discriminatedUnion('code', [
   simpleError('BOOKING_NOT_CONFIRMABLE'),
   simpleError('CONFLICT'),
   simpleError('RATE_LIMITED'),
+  simpleError('PAYLOAD_TOO_LARGE'),
+  simpleError('UNAVAILABLE'),
   simpleError('INTERNAL'),
 ])
 export type ApiError = z.infer<typeof ApiErrorSchema>
@@ -448,10 +456,15 @@ export const GetSeatMapResponseSchema = apiOk(SeatMapResponseSchema)
 export const HoldResponseSchema = apiOk(HoldSchema)
 export const ReleaseHoldResponseSchema = apiOk(ReleasedHoldSchema)
 export const BookingResponseSchema = apiOk(BookingRecordSchema)
+export const HealthResponseSchema = apiOk(z.object({
+  status: z.literal('ok'),
+  db: z.literal('ok'),
+}))
 
 // ---------------------------------------------------------------- routes and limits
 
 export const routes = {
+  health: '/api/health',
   movies: '/api/movies',
   movie: (id: string) => `/api/movies/${encodeURIComponent(id)}`,
   shows: '/api/shows',

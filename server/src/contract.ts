@@ -12,6 +12,7 @@ export {
   ERROR_MESSAGE,
   ERROR_STATUS,
   GetMovieResponseSchema,
+  HealthResponseSchema,
   GetSeatMapResponseSchema,
   GetShowResponseSchema,
   HoldResponseSchema,

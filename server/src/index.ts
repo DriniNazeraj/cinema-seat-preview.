@@ -15,7 +15,7 @@ async function main(): Promise<void> {
   const stopSweeper = startSweeper()
   const server = createApp().listen(config.port, () => {
     console.log(
-      `cinema api listening on port ${config.port} (tz ${config.cinemaTz}, hold ${config.holdSeconds}s)`,
+      `cinema api listening on port ${config.port} (tz ${config.cinemaTz}, hold ${config.holdSeconds}s, trust proxy ${config.trustProxy})`,
     )
   })
 
