@@ -11,8 +11,8 @@ export class ApiException extends Error {
     code: ErrorCode,
     opts?: { message?: string; fields?: Record<string, string>; seatIds?: string[] },
   ) {
-    if (code === 'SEAT_TAKEN' && (!opts?.seatIds || opts.seatIds.length === 0)) {
-      throw new Error('SEAT_TAKEN requires seatIds')
+    if ((code === 'SEAT_TAKEN' || code === 'ACCESS_SEAT_MISMATCH') && (!opts?.seatIds || opts.seatIds.length === 0)) {
+      throw new Error(`${code} requires seatIds`)
     }
     const message =
       opts?.message ??
@@ -28,7 +28,7 @@ export class ApiException extends Error {
 export function errorBody(err: ApiException): { ok: false; error: Record<string, unknown> } {
   const error: Record<string, unknown> = { code: err.code, message: err.message }
   if (err.fields && Object.keys(err.fields).length > 0) error.fields = err.fields
-  if (err.code === 'SEAT_TAKEN') error.seatIds = err.seatIds
+  if (err.code === 'SEAT_TAKEN' || err.code === 'ACCESS_SEAT_MISMATCH') error.seatIds = err.seatIds
   return ApiFailureSchema.parse({ ok: false, error })
 }
 

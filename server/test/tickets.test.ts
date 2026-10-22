@@ -12,10 +12,13 @@ import {
 import { pool } from '../src/db.ts'
 
 const showId = 'ticket-rules'
+const pairShowId = 'ticket-pair'
+const okShowId = 'ticket-ok'
+const showIds = [showId, pairShowId, okShowId]
 let server: Server
 let base: string
 
-type ErrorBody = { code?: string; message?: string; fields?: Record<string, string> }
+type ErrorBody = { code?: string; message?: string; fields?: Record<string, string>; seatIds?: string[] }
 type Envelope = {
   ok: boolean
   data?: {
@@ -29,13 +32,13 @@ type Envelope = {
 }
 
 async function reset(): Promise<void> {
-  await pool.query('DELETE FROM seat_occupancy WHERE show_id = $1', [showId])
-  await pool.query('DELETE FROM booking_seats WHERE booking_id IN (SELECT id FROM bookings WHERE show_id = $1)', [showId])
-  await pool.query('DELETE FROM bookings WHERE show_id = $1', [showId])
-  await pool.query('DELETE FROM holds WHERE show_id = $1', [showId])
+  await pool.query('DELETE FROM seat_occupancy WHERE show_id = ANY($1::text[])', [showIds])
+  await pool.query('DELETE FROM booking_seats WHERE booking_id IN (SELECT id FROM bookings WHERE show_id = ANY($1::text[]))', [showIds])
+  await pool.query('DELETE FROM bookings WHERE show_id = ANY($1::text[])', [showIds])
+  await pool.query('DELETE FROM holds WHERE show_id = ANY($1::text[])', [showIds])
   await pool.query('DELETE FROM idempotency_keys WHERE key LIKE $1', [`${showId}%`])
-  await pool.query('DELETE FROM ticket_prices WHERE show_id = $1', [showId])
-  await pool.query('DELETE FROM shows WHERE id = $1', [showId])
+  await pool.query('DELETE FROM ticket_prices WHERE show_id = ANY($1::text[])', [showIds])
+  await pool.query('DELETE FROM shows WHERE id = ANY($1::text[])', [showIds])
 }
 
 async function post(path: string, body: unknown): Promise<{ status: number; body: Envelope }> {
@@ -47,8 +50,8 @@ async function post(path: string, body: unknown): Promise<{ status: number; body
   return { status: response.status, body: (await response.json()) as Envelope }
 }
 
-async function hold(seats: string[]): Promise<string> {
-  const result = await post('/api/holds', { showId, seats })
+async function hold(seats: string[], forShow = showId): Promise<string> {
+  const result = await post('/api/holds', { showId: forShow, seats })
   expect(result.status, JSON.stringify(result.body)).toBe(201)
   const id = (result.body.data as { id?: string } | undefined)?.id
   if (!id) throw new Error('hold did not return an id')
@@ -69,18 +72,20 @@ beforeAll(async () => {
   await migrate()
   await seed()
   await reset()
-  await pool.query(
-    `INSERT INTO shows (id, movie_id, start, format, hall_id, sold_out)
-     VALUES ($1, 'starlight-run', now() + interval '2 days', '2D', 'h1', false)`,
-    [showId],
-  )
-  await pool.query(
-    `INSERT INTO ticket_prices (show_id, ticket_type, price_cents, currency) VALUES
-       ($1, 'adult', $2, 'EUR'),
-       ($1, 'child', $3, 'EUR'),
-       ($1, 'disabled', $4, 'EUR')`,
-    [showId, PLACEHOLDER_TICKET_PRICES.adult, PLACEHOLDER_TICKET_PRICES.child, PLACEHOLDER_TICKET_PRICES.disabled],
-  )
+  for (const id of showIds) {
+    await pool.query(
+      `INSERT INTO shows (id, movie_id, start, format, hall_id, sold_out)
+       VALUES ($1, 'starlight-run', now() + interval '2 days', '2D', 'h1', false)`,
+      [id],
+    )
+    await pool.query(
+      `INSERT INTO ticket_prices (show_id, ticket_type, price_cents, currency) VALUES
+         ($1, 'adult', $2, 'EUR'),
+         ($1, 'child', $3, 'EUR'),
+         ($1, 'disabled', $4, 'EUR')`,
+      [id, PLACEHOLDER_TICKET_PRICES.adult, PLACEHOLDER_TICKET_PRICES.child, PLACEHOLDER_TICKET_PRICES.disabled],
+    )
+  }
 
   server = createApp().listen(0, '127.0.0.1')
   await new Promise<void>((resolve) => server.once('listening', resolve))
@@ -176,14 +181,36 @@ test('an access seat without a disabled ticket is rejected', async () => {
   expect(result.status).toBe(422)
   expect(result.body.error?.code).toBe('ACCESS_SEAT_MISMATCH')
   expect(result.body.error?.message).toBe(ACCESS_SEAT_MISMATCH_MESSAGE)
-  expect(result.body.error?.fields?.tickets).toBe(ACCESS_SEAT_MISMATCH_MESSAGE)
+  expect(result.body.error?.seatIds).toEqual(['J15'])
 })
 
-test('a companion seat does not count as access', async () => {
-  const holdId = await hold(['J3'])
-  const result = await booking(holdId, [{ seatId: 'J3', ticketType: 'adult' }])
+test('adult on an access seat and disabled on a standard seat lists both', async () => {
+  const holdId = await hold(['J1', 'E5'], pairShowId)
+  const result = await booking(holdId, [
+    { seatId: 'J1', ticketType: 'adult' },
+    { seatId: 'E5', ticketType: 'disabled' },
+  ])
+  expect(result.status).toBe(422)
+  expect(result.body.error?.code).toBe('ACCESS_SEAT_MISMATCH')
+  expect(result.body.error?.seatIds).toEqual(['J1', 'E5'])
+})
+
+test('disabled tickets on access seats and an adult on the companion seat succeeds', async () => {
+  const holdId = await hold(['J1', 'J16', 'J3'], okShowId)
+  const result = await booking(holdId, [
+    { seatId: 'J1', ticketType: 'disabled' },
+    { seatId: 'J16', ticketType: 'disabled' },
+    { seatId: 'J3', ticketType: 'adult' },
+  ])
   expect(result.status).toBe(201)
-  expect(result.body.data?.total).toBe(PLACEHOLDER_TICKET_PRICES.adult)
+  expect(result.body.data?.status).toBe('pending')
+  expect(result.body.data?.seats).toEqual(['J1', 'J16', 'J3'])
+  expect(result.body.data?.total).toBe(PLACEHOLDER_TICKET_PRICES.disabled * 2 + PLACEHOLDER_TICKET_PRICES.adult)
+  expect(result.body.data?.tickets).toEqual([
+    { seatId: 'J1', ticketType: 'disabled', priceCents: PLACEHOLDER_TICKET_PRICES.disabled },
+    { seatId: 'J16', ticketType: 'disabled', priceCents: PLACEHOLDER_TICKET_PRICES.disabled },
+    { seatId: 'J3', ticketType: 'adult', priceCents: PLACEHOLDER_TICKET_PRICES.adult },
+  ])
 })
 
 test('an unknown ticket type is a validation error', async () => {

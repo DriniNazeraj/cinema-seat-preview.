@@ -127,7 +127,7 @@ export type TicketPrice = z.infer<typeof TicketPriceSchema>
 
 export const CHILD_ONLY_MESSAGE = 'A booking must include at least one adult or disabled ticket.'
 export const ACCESS_SEAT_MISMATCH_MESSAGE =
-  'The number of access seats must equal the number of disabled tickets.'
+  'A disabled ticket must be on an access seat, and an access seat must have a disabled ticket.'
 
 /**
  * Show JSON on the wire. `price` stays the mock field (adult price in euros,
@@ -438,7 +438,7 @@ export const ERROR_MESSAGE: Record<ErrorCode, string> = {
 const errorFields = z.record(z.string(), z.string()).optional()
 const errorMessage = z.string().min(1)
 
-function simpleError<C extends Exclude<ErrorCode, 'SEAT_TAKEN'>>(code: C) {
+function simpleError<C extends Exclude<ErrorCode, 'SEAT_TAKEN' | 'ACCESS_SEAT_MISMATCH'>>(code: C) {
   return z.object({
     code: z.literal(code),
     message: errorMessage,
@@ -454,13 +454,19 @@ export const ApiErrorSchema = z.discriminatedUnion('code', [
     seatIds: z.array(SeatId).min(1),
     fields: errorFields,
   }),
+  z.object({
+    code: z.literal('ACCESS_SEAT_MISMATCH'),
+    message: errorMessage,
+    /** Seats whose ticket does not match the access rule. Always at least one. */
+    seatIds: z.array(SeatId).min(1),
+    fields: errorFields,
+  }),
   simpleError('VALIDATION_ERROR'),
   simpleError('NOT_FOUND'),
   simpleError('HOLD_EXPIRED'),
   simpleError('HOLD_CONSUMED'),
   simpleError('HOLD_SEAT_MISMATCH'),
   simpleError('CHILD_ONLY_BOOKING'),
-  simpleError('ACCESS_SEAT_MISMATCH'),
   simpleError('SHOW_SOLD_OUT'),
   simpleError('BOOKING_NOT_CONFIRMABLE'),
   simpleError('CONFLICT'),

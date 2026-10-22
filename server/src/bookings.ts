@@ -307,10 +307,18 @@ async function assertAccessSeats(
     [showId, seats],
   )
   if (result.rows.length !== seats.length) throw new Error(`Show ${showId} is missing a held seat`)
-  const access = result.rows.filter((row) => row.kind === 'access').length
-  const disabled = tickets.filter((ticket) => ticket.ticketType === 'disabled').length
-  if (access !== disabled) {
-    throw new ApiException('ACCESS_SEAT_MISMATCH', { fields: { tickets: ACCESS_SEAT_MISMATCH_MESSAGE } })
+  const kindOf = new Map(result.rows.map((row) => [row.id, row.kind]))
+  const ticketOf = new Map(tickets.map((ticket) => [ticket.seatId, ticket.ticketType]))
+  const mismatched = seats.filter((seatId) => {
+    const access = kindOf.get(seatId) === 'access'
+    const disabled = ticketOf.get(seatId) === 'disabled'
+    return access !== disabled
+  })
+  if (mismatched.length) {
+    throw new ApiException('ACCESS_SEAT_MISMATCH', {
+      seatIds: mismatched,
+      fields: { tickets: ACCESS_SEAT_MISMATCH_MESSAGE },
+    })
   }
 }
 

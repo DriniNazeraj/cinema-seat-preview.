@@ -20,7 +20,7 @@ Failure:
 { "ok": false, "error": { "code": "NOT_FOUND", "message": "Not found." } }
 ```
 
-`error.fields` is optional. Keys are the form field (`name`, `email`, `phone`, `seats`, `tickets`, `holdId`, `showId`) or a dotted path (`tickets.0.ticketType`). `error.seatIds` exists only on `SEAT_TAKEN`.
+`error.fields` is optional. Keys are the form field (`name`, `email`, `phone`, `seats`, `tickets`, `holdId`, `showId`) or a dotted path (`tickets.0.ticketType`). `error.seatIds` is present on `SEAT_TAKEN` and `ACCESS_SEAT_MISMATCH`.
 
 Timestamps are ISO-8601 UTC from `Date#toISOString()` (`2026-10-22T11:30:00.000Z`). Seat ids match `/^[A-Z]\d{1,2}$/` (`A1`, `J16`). A booking holds at most `MAX_SEATS` (8) seats, and the seat ids in one request are unique.
 
@@ -267,7 +267,7 @@ Expired holds free themselves without a client call.
 
 Ticket type is per seat: `adult`, `child`, or `disabled`. One booking holds at most 8 tickets, counting every type together. A booking needs at least one adult or disabled ticket. That list is `COUNTS_AS_ADULT` in `src/lib/api-contract.ts`. A child-only booking is rejected. The check runs in `CreateBookingBodySchema` and again in the create transaction before any row is written. The HTTP code is `CHILD_ONLY_BOOKING`, not `VALIDATION_ERROR`, when that is the reason. An unknown `ticketType` is `400` `VALIDATION_ERROR`.
 
-The number of `access` seats in the hold must equal the number of `disabled` tickets. Access seats do not have to be next to each other, and the disabled ticket does not have to be the one sitting in the access seat. Companion seats are not access seats. A hold may include access seats; the check runs when the booking is created. A mismatch is `422` `ACCESS_SEAT_MISMATCH`.
+A `disabled` ticket must be on an `access` seat, and an `access` seat must have a `disabled` ticket. Companion and standard seats take `adult` or `child`. A hold may include access seats; the check runs when the booking is created. A mismatch is `422` `ACCESS_SEAT_MISMATCH`, and `error.seatIds` lists the seats that break the rule, in hold order.
 
 ### `POST /api/bookings`
 
@@ -322,7 +322,7 @@ The hold stays live. Occupancy rows stay `kind = 'hold'` until confirm. One pend
 |---|---|---|
 | bad body, duplicate seats, unknown ticket type, more than 8 tickets | 400 | `VALIDATION_ERROR` |
 | no adult or disabled ticket | 422 | `CHILD_ONLY_BOOKING` |
-| access seats ≠ disabled tickets | 422 | `ACCESS_SEAT_MISMATCH` |
+| disabled ticket off an access seat, or access seat without a disabled ticket | 422 | `ACCESS_SEAT_MISMATCH` |
 | hold id unknown | 404 | `NOT_FOUND` |
 | hold expired or released | 409 | `HOLD_EXPIRED` |
 | hold already confirmed | 409 | `HOLD_CONSUMED` |
@@ -379,7 +379,7 @@ Already confirmed: `200` with the confirmed booking. Expired hold: `409` `HOLD_E
 | `HOLD_CONSUMED` | 409 | The hold already became a confirmed booking. Release must not free those seats. |
 | `HOLD_SEAT_MISMATCH` | 409 | Ticket seats are not exactly the hold's seats. |
 | `CHILD_ONLY_BOOKING` | 422 | The booking has no adult or disabled ticket. |
-| `ACCESS_SEAT_MISMATCH` | 422 | The hold's access seats and the disabled tickets are different counts. |
+| `ACCESS_SEAT_MISMATCH` | 422 | A disabled ticket is not on an access seat, or an access seat does not have a disabled ticket. `seatIds` lists those seats. |
 | `SHOW_SOLD_OUT` | 409 | Hold requested on a sold-out show. |
 | `BOOKING_NOT_CONFIRMABLE` | 409 | Confirm cannot move this booking to `confirmed`. |
 | `CONFLICT` | 409 | Same hold booked again with a different body, or an unexpected unique violation. |
@@ -516,7 +516,7 @@ booking_seats (
 
 Index suggestion: `(expires_at) where kind = 'hold'` on `seat_occupancy`, for the sweeper.
 
-At least one adult or disabled ticket is enforced in the create transaction (and by `CreateBookingBodySchema`). The access-seat count is checked the same way. Both are business rules, not a uniqueness race. The seat lock is the primary key.
+At least one adult or disabled ticket is enforced in the create transaction (and by `CreateBookingBodySchema`). Each disabled ticket must sit on an access seat, and each access seat must carry a disabled ticket. Both are business rules, not a uniqueness race. The seat lock is the primary key.
 
 ## Fetcher names
 
@@ -548,7 +548,7 @@ The read path (`listMovies`, `getMovie`, `listShows`, `getShow`, and `getSeatMap
 
 5. **Held vs booked.** The map UI has `free | taken | selected` (`SeatMap2D`). The API adds `statuses[]` with `available | held | booked`. Parsing with `SeatMapSchema` drops `statuses`. Held and booked both render as taken until the map reads `statuses`. The mock `type` stays `"std" | "access"`. The API also sends `kind`: `"standard" | "access" | "companion"`, which `SeatSchema` strips.
 
-6. **Ticket type per seat.** `BookingInputSchema` is `{ showId, seats, name, email, phone? }`. Create sends `{ holdId, name, email, phone?, tickets: [{ seatId, ticketType }] }` and does not send a price. The details form has no adult/child/disabled control. Ticket types are `adult`, `child`, and `disabled`. A booking needs at least one adult or disabled ticket. Child-only bookings are `422` `CHILD_ONLY_BOOKING`. Access seats must match the disabled-ticket count (`422` `ACCESS_SEAT_MISMATCH`). There is no senior type. Do not add one.
+6. **Ticket type per seat.** `BookingInputSchema` is `{ showId, seats, name, email, phone? }`. Create sends `{ holdId, name, email, phone?, tickets: [{ seatId, ticketType }] }` and does not send a price. The details form has no adult/child/disabled control. Ticket types are `adult`, `child`, and `disabled`. A booking needs at least one adult or disabled ticket. Child-only bookings are `422` `CHILD_ONLY_BOOKING`. A disabled ticket must be on an access seat, and an access seat must have a disabled ticket (`422` `ACCESS_SEAT_MISMATCH`, with `error.seatIds`). There is no senior type. Do not add one.
 
 7. **One-shot create vs hold → pending → confirm.** `createBooking` checks `taken`, writes a booking, and the page navigates straight to `/booking/confirmed?ref=`. The API create leaves `status: "pending"`. The confirm button should `POST /api/bookings` and then `POST /api/bookings/:ref/confirm`. Confirm does not charge; the "Demo, no payment taken" copy can stay until the payment slot in the confirm section is filled. The client must not treat create as confirmed.
 
