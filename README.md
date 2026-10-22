@@ -15,7 +15,13 @@ npm run serve:prod [-- 4180]  # tiny no-deps static server (default port 4175): 
 node scripts/screenshots.mjs   # headless screenshots (needs preview running)
 node scripts/flow-smoke.mjs    # seat -> booking -> confirmed smoke test
 ```
-No env vars are needed. Don't commit `.env*`.
+No env vars are needed for the Vite app. Don't commit `.env*`.
+
+## API server
+
+The booking HTTP API is a separate Express app in [`server/`](server/). Contract: [`docs/api.md`](docs/api.md) and `src/lib/api-contract.ts`. This UI still reads the mock in `src/lib/api.ts`.
+
+Migrate, seed placeholder films and cents prices, and run the dev server: [`docs/server.md`](docs/server.md).
 
 ## How it's put together
 - `src/lib/api.ts` — **the only data module**: zod schemas, async mock functions (`listMovies`, `listShows`, `getSeatMap`, `createBooking`, …). Seat ids are stable `A1`…`J16`. Swap bodies for `fetch` calls when the back end lands.

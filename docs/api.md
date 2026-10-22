@@ -1,6 +1,6 @@
 # Lumen Cinema HTTP API
 
-Contract for the booking back end. This repo does not implement it. `src/lib/api-contract.ts` is the zod module the server, and later the front end, import. It has no server imports. `MovieSchema`, `ShowSchema`, `SeatSchema`, `SeatMapSchema`, `BookingInputSchema`, and `BookingSchema` in that file match `src/lib/api.ts`. The mock keeps its own copy of those six schemas so the current client bundle does not load the hold and booking wire schemas.
+Contract for the booking back end. The server in [`server/`](../server/) implements it (see [`docs/server.md`](server.md)). The Vite client still uses the mock. `src/lib/api-contract.ts` is the zod module the server, and later the front end, import. It has no server imports. `MovieSchema`, `ShowSchema`, `SeatSchema`, `SeatMapSchema`, `BookingInputSchema`, and `BookingSchema` in that file match `src/lib/api.ts`. The mock keeps its own copy of those six schemas so the current client bundle does not load the hold and booking wire schemas.
 
 The planned server is Express + TypeScript, Postgres via `pg`, zod for every request and response, `express-rate-limit`, `helmet`, and `cors`. No payment provider.
 
