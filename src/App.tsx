@@ -2,18 +2,14 @@ import { lazy, Suspense } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import { Layout } from '@/components/Layout'
 import { Container, Skeleton } from '@/components/ui'
-import Home from '@/pages/Home'
-import NowShowing from '@/pages/NowShowing'
-import MoviePage from '@/pages/Movie'
-import BookingPage from '@/pages/Booking'
-import Confirmed from '@/pages/Confirmed'
+import { BookingPage, Confirmed, Home, MoviePage, NowShowing } from '@/routes'
 
 const SeatsPage = lazy(() => import('@/pages/Seats'))
 
 export default function App() {
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route element={<Suspense fallback={<Container className="min-h-[115svh] py-10"><Skeleton className="h-96" /></Container>}><Layout /></Suspense>}>
         <Route index element={<Home />} />
         <Route path="now-showing" element={<NowShowing />} />
         <Route path="movie/:id" element={<MoviePage />} />

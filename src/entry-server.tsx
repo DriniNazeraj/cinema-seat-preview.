@@ -1,6 +1,7 @@
 import { renderToString } from 'react-dom/server'
 import { StaticRouter } from 'react-router-dom/server'
 import App from './App'
+import { preloadAll } from '@/routes'
 import { BookingProvider } from '@/lib/booking'
 import { DataContext } from '@/lib/useData'
 import { getMovie, listMovies, listShows } from '@/lib/api'
@@ -8,6 +9,7 @@ import { headTags, metaFor } from '@/lib/seo'
 export { __static } from '@/lib/api'
 
 export async function render(url: string) {
+  await preloadAll()
   const data: Record<string, unknown> = { movies: await listMovies() }
   if (url === '/' || url === '/now-showing') data['shows:all'] = await listShows()
   const m = url.match(/^\/movie\/([^/]+)$/)

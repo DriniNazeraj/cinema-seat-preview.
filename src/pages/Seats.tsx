@@ -11,7 +11,7 @@ import { cn, dayLabel, eur, prefersReducedMotion, time } from '@/lib/format'
 import { Button, Container, ErrorCard, Skeleton } from '@/components/ui'
 import { Curtains, type CurtainPhase } from '@/components/Curtains'
 import { SeatSheet } from '@/components/SeatSheet'
-import { SeatLegend, SeatMap2D } from '@/components/SeatMap2D'
+import { resetSeatMapZoom, SeatLegend, SeatMap2D } from '@/components/SeatMap2D'
 import { StepIndicator } from '@/components/Shows'
 import { ViewFromSeatCard } from '@/components/ViewFromSeatCard'
 
@@ -56,6 +56,8 @@ export default function SeatsPage() {
   const peekRef = useRef<HTMLButtonElement>(null)
   // fix6: never start the 3D mount (shader compile) mid-slide; a mounted hall is frozen (paused) during the slide
   const hallMounted = useRef(false)
+  // fix7: reduced motion -> no hall fade, the hall is simply there when the curtains are gone
+  const reduceMotion = useMemo(() => prefersReducedMotion(), [])
 
   // No ?show= in the URL (e.g. a shared/bookmarked /movie/:id/seats link): pick the next bookable show
   // instead of dead-ending, keeping other params such as ?3d=1.
@@ -74,6 +76,7 @@ export default function SeatsPage() {
   }, [showId, id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (showId) booking.setShow(showId) }, [showId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
+    resetSeatMapZoom()
     const d = decideThree()
     setDecision(d)
     setThreeOn(d.mode === 'auto')
@@ -175,8 +178,8 @@ export default function SeatsPage() {
           </div>
         )}
         {map.data && threeOn && idle && !lostNote && (curtain !== 'opening' || hallMounted.current) && (hallMounted.current = true) && (
-          <div className={cn('absolute inset-0 transition-opacity duration-500', threeReady && !curtainsUp ? 'opacity-100' : 'invisible opacity-0')}
-            onTransitionEnd={(e) => { if (e.target === e.currentTarget && threeReady) performance.mark('lumen:hall-shown') }}>
+          <div className={cn('absolute inset-0', !reduceMotion && 'transition-opacity duration-500', threeReady && !curtainsUp ? 'opacity-100' : 'invisible opacity-0')}
+            onTransitionEnd={(e) => { if (!reduceMotion && e.target === e.currentTarget && threeReady && !performance.getEntriesByName('lumen:hall-shown').length) performance.mark('lumen:hall-shown') }}>
             <GLBoundary onError={() => setLostNote('3D view unavailable, showing simple view')}>
               <Suspense fallback={null}>
                                   <HallScene3D hall={map.data.hall} taken={taken} selected={selected} focusSeat={focusSeat} hovered={hovered}
@@ -217,7 +220,7 @@ export default function SeatsPage() {
         )}
       </div>
 
-      {curtainsUp && <Curtains phase={curtain} progress={progress} hideLine={quick} onGone={() => { performance.mark('lumen:curtain-gone'); setCurtain('gone'); setTimeout(() => setSheetOpen(true), 200) }} />}
+      {curtainsUp && <Curtains phase={curtain} progress={progress} hideLine={quick} onGone={() => { performance.mark('lumen:curtain-gone'); if (reduceMotion && threeReady) performance.mark('lumen:hall-shown'); setCurtain('gone'); setTimeout(() => setSheetOpen(true), 200) }} />}
       {/* real-text overlay above the curtains (z-60): LCP is text, never the canvas */}
       {curtainsUp && (
         <div className={cn('fixed inset-0 z-[60] grid place-items-center p-6 text-center transition-opacity duration-200', curtain === 'opening' && 'pointer-events-none opacity-0')}>

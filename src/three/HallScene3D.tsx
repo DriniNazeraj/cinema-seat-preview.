@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { PerformanceMonitor } from '@react-three/drei'
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { Hall, Seat } from '@/lib/api'
 
 export type HallSceneProps = {
@@ -56,36 +57,31 @@ function eye(p: THREE.Vector3) {
   return { pos: new THREE.Vector3(p.x, p.y + 1.15, p.z + 0.05), look: SCREEN_CENTER.clone() }
 }
 
+/** fix7: one InstancedMesh for all seats (cushion + tilted back merged into one geometry): one draw call, one program */
 function Seats({ hall, taken, selected, hovered, onPick, onHover }: Pick<HallSceneProps, 'hall' | 'taken' | 'selected' | 'hovered' | 'onPick' | 'onHover'>) {
   const items = useMemo(() => layout(hall), [hall])
-  const cushion = useRef<THREE.InstancedMesh>(null)
-  const back = useRef<THREE.InstancedMesh>(null)
-  const geo = useMemo(() => ({
-    cushion: new THREE.BoxGeometry(0.5, 0.18, 0.5),
-    back: new THREE.BoxGeometry(0.5, 0.6, 0.12),
-  }), [])
+  const mesh = useRef<THREE.InstancedMesh>(null)
+  const geo = useMemo(() => {
+    const cushion = new THREE.BoxGeometry(0.5, 0.18, 0.5).translate(0, 0.35, 0)
+    const back = new THREE.BoxGeometry(0.5, 0.6, 0.12).rotateX(-0.12).translate(0, 0.7, 0.25)
+    const g = mergeGeometries([cushion, back])!
+    cushion.dispose(); back.dispose()
+    return g
+  }, [])
   const tmp = useMemo(() => new THREE.Object3D(), [])
 
   useEffect(() => {
+    const m = mesh.current!
     items.forEach(({ seat, pos }, i) => {
       const sel = selected.includes(seat.id)
-      const lift = sel ? 0.08 : 0
-      tmp.position.set(pos.x, pos.y + 0.35 + lift, pos.z)
+      tmp.position.set(pos.x, pos.y + (sel ? 0.08 : 0), pos.z)
       tmp.updateMatrix()
-      cushion.current!.setMatrixAt(i, tmp.matrix)
-      tmp.position.set(pos.x, pos.y + 0.7 + lift, pos.z + 0.25)
-      tmp.rotation.x = -0.12
-      tmp.updateMatrix()
-      tmp.rotation.x = 0
-      back.current!.setMatrixAt(i, tmp.matrix)
-      const col = taken.has(seat.id) ? C.taken : sel ? C.selected : hovered?.id === seat.id ? C.hover : seat.type === 'access' ? C.access : C.free
-      cushion.current!.setColorAt(i, col)
-      back.current!.setColorAt(i, col)
+      m.setMatrixAt(i, tmp.matrix)
+      m.setColorAt(i, taken.has(seat.id) ? C.taken : sel ? C.selected : hovered?.id === seat.id ? C.hover : seat.type === 'access' ? C.access : C.free)
     })
-    for (const m of [cushion.current!, back.current!]) {
-      m.instanceMatrix.needsUpdate = true
-      if (m.instanceColor) m.instanceColor.needsUpdate = true
-    }
+    m.instanceMatrix.needsUpdate = true
+    if (m.instanceColor) m.instanceColor.needsUpdate = true
+    m.computeBoundingSphere()
   }, [items, taken, selected, hovered, tmp])
 
   const handle = (e: ThreeEvent<PointerEvent | MouseEvent>, kind: 'move' | 'click') => {
@@ -95,20 +91,11 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover }: Pick<HallSce
     if (kind === 'click') onPick(item.seat)
     else if (hovered?.id !== item.seat.id) onHover(item.seat)
   }
-  const props = {
-    onClick: (e: ThreeEvent<MouseEvent>) => handle(e, 'click'),
-    onPointerMove: (e: ThreeEvent<PointerEvent>) => handle(e, 'move'),
-    onPointerOut: () => onHover(null),
-  }
   return (
-    <>
-      <instancedMesh ref={cushion} args={[geo.cushion, undefined, items.length]} {...props}>
-        <meshStandardMaterial roughness={0.9} />
-      </instancedMesh>
-      <instancedMesh ref={back} args={[geo.back, undefined, items.length]} {...props}>
-        <meshStandardMaterial roughness={0.9} />
-      </instancedMesh>
-    </>
+    <instancedMesh ref={mesh} args={[geo, undefined, items.length]}
+      onClick={(e: ThreeEvent<MouseEvent>) => handle(e, 'click')} onPointerMove={(e: ThreeEvent<PointerEvent>) => handle(e, 'move')} onPointerOut={() => onHover(null)}>
+      <meshStandardMaterial roughness={0.9} />
+    </instancedMesh>
   )
 }
 
@@ -229,6 +216,39 @@ function CameraRig({ hall, focusSeat, resetKey, instant }: Pick<HallSceneProps, 
   return null
 }
 
+type IdleWin = Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void }
+/** next idle slot (Safari: setTimeout); returns a cancel fn */
+function onIdle(cb: () => void) {
+  const w = window as IdleWin
+  if (w.requestIdleCallback) { const id = w.requestIdleCallback(cb, { timeout: 400 }); return () => w.cancelIdleCallback?.(id) }
+  const t = setTimeout(cb, 16); return () => clearTimeout(t)
+}
+
+/** fix7: the hall used to build + link every shader + draw in one ~550ms task (4x CPU). Now each distinct shader program
+ *  (material type x instancing x map x side) is compiled against the real scene lights in its own idle callback,
+ *  then the first frame runs in another one. No single task does more than one program link. */
+function Warmup({ onDone }: { onDone: () => void }) {
+  const { gl, scene, camera } = useThree()
+  useEffect(() => {
+    performance.mark('lumen:hall-compile-start')
+    const seen = new Set<string>(), reps: THREE.Object3D[] = []
+    scene.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.Material & { map?: unknown }
+      if (!(o as THREE.Mesh).isMesh || !m) return
+      const k = `${m.type}|${(o as THREE.InstancedMesh).isInstancedMesh ? 1 : 0}|${m.map ? 1 : 0}|${m.side}`
+      if (!seen.has(k)) { seen.add(k); reps.push(o) }
+    })
+    let i = 0, cancel = () => {}
+    const step = () => {
+      if (i < reps.length) { gl.compile(reps[i++], camera, scene); cancel = onIdle(step) }
+      else { performance.mark('lumen:hall-compiled'); onDone() }
+    }
+    cancel = onIdle(step)
+    return () => cancel()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  return null
+}
+
 /** fix5: real readiness for the curtain loader = scene has rendered 2 frames (shaders compiled). */
 function FirstFrame({ onReady }: { onReady?: () => void }) {
   const n = useRef(0)
@@ -260,12 +280,16 @@ export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; 
   const [stage, setStage] = useState(0)
   const low = stage > 0
   const lowDpr = maxDpr > 1.5 ? 0.75 : 1
+  const [compiled, setCompiled] = useState(false)
+  // fix7: build the scene graph in two commits (room + lights, then the instanced seats) in separate idle slots
+  const [built, setBuilt] = useState(false)
+  useEffect(() => onIdle(() => setBuilt(true)), [])
   return (
     <div data-quality={low ? 'low' : 'full'} className="size-full">
     <Canvas
       dpr={low ? lowDpr : dpr}
       // fix6: frozen while the curtains slide, so software/weak GPUs give the compositor the whole frame budget
-      frameloop={p.paused ? 'never' : 'always'}
+      frameloop={p.paused || !compiled ? 'never' : 'always'}
       camera={{ fov: 55, near: 0.1, far: 80 }}
       gl={{ antialias: !p.phone, powerPreference: 'high-performance' }}
       shadows={false}
@@ -280,8 +304,9 @@ export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; 
       {!low && <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(maxDpr)} />}
       {p.fpsGuard && stage < 2 && <FpsGuard key={stage} forceSlow={p.fpsForceSlow} onSlow={() => { if (stage === 0) setStage(1); else { setStage(2); p.onStillSlow?.() } }} />}
       <Room hall={p.hall} low={low} />
-      <Seats {...p} />
+      {built && <Seats {...p} />}
       <FirstFrame onReady={p.onReady} />
+      {built && !compiled && <Warmup onDone={() => setCompiled(true)} />}
       <CameraRig hall={p.hall} focusSeat={p.focusSeat} resetKey={p.resetKey} instant={p.instant} />
     </Canvas>
     </div>

@@ -16,8 +16,16 @@ const routes = ['/', '/now-showing', '/booking', '/booking/confirmed', ...mod.__
 // keep a pristine SPA shell for non-prerendered routes (seat picker)
 fs.writeFileSync(path.join(dist, '200.html'), template.replace('<!--head-->', '<link rel="preload" as="image" href="/velvet-tile.webp" type="image/webp" fetchpriority="high" />\n    <meta name="robots" content="noindex" />\n    <meta name="description" content="Choose your seats with a 3D view from your seat. Lumen Cinema [PH] demo." />'))
 
+// fix7: pages are code-split; modulepreload the current page's chunk (+ its non-entry imports) so it loads in parallel with the entry
+const pageFile = (r: string) => r === '/' ? 'Home' : r === '/now-showing' ? 'NowShowing' : r === '/booking' ? 'Booking' : r === '/booking/confirmed' ? 'Confirmed' : 'Movie'
+function pageChunks(name: string) {
+  const key = Object.keys(manifest).find((k) => k.endsWith(`pages/${name}.tsx`)); if (!key) return []
+  const seen = new Set<string>(); const walk = (k: string) => { if (seen.has(k) || manifest[k].isEntry) return; seen.add(k); (manifest[k].imports ?? []).forEach(walk) }
+  walk(key); return [...seen].map((k) => '/' + manifest[k].file)
+}
 for (const r of routes) {
-  const { html, head, data } = await mod.render(r)
+  const { html, head: head0, data } = await mod.render(r)
+  const head = head0 + pageChunks(pageFile(r)).map((u) => `\n    <link rel="modulepreload" crossorigin href="${u}" />`).join('')
   const out = template.replace(/<title>.*?<\/title>/, '').replace('<!--head-->', head).replace('<!--app-->', html).replace('</body>', `<script>window.__DATA__=${JSON.stringify(data).replace(/</g, '\\u003c')}</script>\n  </body>`)
   const file = path.join(dist, r === '/' ? 'index.html' : `${r.slice(1)}/index.html`)
   fs.mkdirSync(path.dirname(file), { recursive: true })

@@ -13,7 +13,10 @@ for (const [name, vp] of Object.entries(vps)) {
     await p.goto(URL); await p.waitForSelector('[data-curtains="closed"]', { state: 'attached' }); await p.waitForTimeout(150); await p.screenshot({ path: `${OUT}/1-curtains-closed-${name}.png` })
     // mid-open frame: see scripts/shot-midopen.mjs (the 1s slide is shorter than a software-GL screenshot)
     await p.waitForSelector('[role="dialog"]', { timeout: 15000 }); await p.waitForTimeout(800); await p.screenshot({ path: `${OUT}/3-hall-fullscreen-sheet-${name}.png` })
-    const free = p.locator('[role="dialog"] [data-seat][aria-label*="free"]').nth(40); await free.click(); await p.waitForTimeout(1200)
+    const free = p.locator('[role="dialog"] [data-seat][aria-label*="free"]').nth(40); await free.click(); await p.waitForTimeout(300)
+    // fix7: phone fit mode - first tap zooms, second picks
+    if (await p.locator('[role="dialog"] [data-seat][aria-pressed="true"]').count() === 0 && await p.locator('[role="dialog"]').count()) await free.click()
+    await p.waitForTimeout(1200)
     await p.screenshot({ path: `${OUT}/4-hall-peek-after-pick-${name}.png` })
     await p.getByRole('button', { name: 'Continue' }).last().click(); await p.waitForURL(/booking/); console.log(name, '3D flow reached', new globalThis.URL(p.url()).pathname)
     await c.close() }

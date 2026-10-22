@@ -24,6 +24,10 @@ type Props = {
   compact?: boolean
 }
 
+let keptZoom = false
+/** seat page calls this on mount so a new visit starts in fit mode */
+export function resetSeatMapZoom() { keptZoom = false }
+
 export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shakeId, readOnly, compact }: Props) {
   const firstFree = hall.rows.flatMap((r) => r.seats).find((s) => !taken.has(s.id))
   const [focusId, setFocusId] = useState<string | undefined>(selected[0] ?? firstFree?.id)
@@ -33,7 +37,20 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
   const scroller = useRef<HTMLDivElement>(null)
   // fix6: interactive map fits the whole row to the panel width (1fr columns, 3px gap); pinch (or the zoom button) zooms
   // to 44px seats. Seats under 20px hide their numbers (the tooltip / aria-label still give them).
-  const [zoomed, setZoomed] = useState(false)
+  // zoom survives the sheet closing/reopening during this page visit (the map unmounts with the sheet)
+  const [zoomed, setZoomedRaw] = useState(() => !compact && keptZoom)
+  const setZoomed = (z: boolean | ((v: boolean) => boolean)) => setZoomedRaw((v) => { const n = typeof z === 'function' ? z(v) : z; keptZoom = n; return n })
+  // fix7 (designer): on phones a pointer tap in fit mode never picks; it zooms (~2.5-3x, seats >= 44px) centred on that seat.
+  // Keyboard / screen-reader activation (click with detail 0) still picks. Desktop unchanged.
+  const [phone, setPhone] = useState(false)
+  const [everZoomed, setEverZoomed] = useState(() => keptZoom)
+  const zoomTo = useRef<string | null>(null)
+  useEffect(() => {
+    if (compact) return
+    const mq = window.matchMedia('(max-width: 767px)'); const f = () => setPhone(mq.matches); f()
+    mq.addEventListener('change', f); return () => mq.removeEventListener('change', f)
+  }, [compact])
+  useEffect(() => { if (zoomed) setEverZoomed(true) }, [zoomed])
   const [cell, setCell] = useState(44)
   const pinch = useRef<number | null>(null)
   useEffect(() => {
@@ -42,7 +59,14 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
     ro.observe(g); return () => ro.disconnect()
   }, [compact])
   // when zooming in, keep the middle block in view
-  useEffect(() => { const el = scroller.current; if (el && zoomed) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2 }, [zoomed])
+  useEffect(() => {
+    const el = scroller.current; if (!el || !zoomed) return
+    const id = zoomTo.current; zoomTo.current = null
+    const seatEl = id ? ref.current?.querySelector<HTMLElement>(`[data-seat="${id}"]`) : null
+    if (seatEl) seatEl.scrollIntoView({ block: 'center', inline: 'center' })
+    else el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2
+  }, [zoomed])
+  const tapZooms = !compact && !readOnly && phone && !zoomed
   const dist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
   const touch = {
     onTouchStart: (e: React.TouchEvent) => { if (e.touches.length === 2) pinch.current = dist(e.touches as unknown as TouchList) },
@@ -119,7 +143,12 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
                       aria-label={seatLabel(seat, st, price)}
                       aria-pressed={st === 'selected'}
                       aria-disabled={st === 'taken' || readOnly || undefined}
-                      onClick={() => !readOnly && onPick(seat)}
+                      data-tapzoom={tapZooms || undefined}
+                      onClick={(e) => {
+                        if (readOnly) return
+                        if (tapZooms && e.detail > 0) { zoomTo.current = seat.id; setFocusId(seat.id); setZoomed(true); return }
+                        onPick(seat)
+                      }}
                       onKeyDown={(e) => onKey(e, seat)}
                       onFocus={() => { setFocusId(seat.id); onHover?.(seat) }}
                       onMouseEnter={(e) => {
@@ -148,6 +177,7 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
         </div>
       </div>
       </div>
+      {!compact && !readOnly && phone && !everZoomed && <p data-tap-hint className="mt-1 text-center text-[11px] text-text-muted">Tap to zoom in, then pick your seat [PH]</p>}
       {tip && !readOnly && (
         <div className="pointer-events-none absolute z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-surface-2 px-3 py-1 text-xs ring-1 ring-border"
           style={tip.below ? { left: tip.x, top: tip.bottom + 6 } : { left: tip.x, top: tip.top - 6, transform: 'translate(-50%, -100%)' }}
