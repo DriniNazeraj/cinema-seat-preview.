@@ -34,6 +34,9 @@ export default function SeatsPage() {
   const [decision, setDecision] = useState<ThreeDecision | null>(null)
   const [threeOn, setThreeOn] = useState(false)
   const [threeReady, setThreeReady] = useState(false)
+  // Defer the three.js import + mount until after the title/showtime/2D map have painted and the
+  // main thread is idle, so 3D never competes with LCP. Safari has no requestIdleCallback -> setTimeout.
+  const [idle, setIdle] = useState(false)
   const [lostNote, setLostNote] = useState<string | null>(null)
   const [focusSeat, setFocusSeat] = useState<Seat | null>(null)
   const [hovered, setHovered] = useState<Seat | null>(null)
@@ -64,6 +67,19 @@ export default function SeatsPage() {
     setThreeOn(d.mode === 'auto')
   }, [])
   useEffect(() => { if (movie.data) document.title = `Choose seats · ${movie.data.title} [PH] | Lumen Cinema [PH]` }, [movie.data])
+
+  const mapReady = !!map.data
+  useEffect(() => {
+    if (!mapReady || idle) return
+    let cancelled = false, idleId: number | undefined, t: ReturnType<typeof setTimeout> | undefined
+    const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void }
+    const go = () => { if (!cancelled) setIdle(true) }
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (w.requestIdleCallback) idleId = w.requestIdleCallback(go, { timeout: 1500 })
+      else t = setTimeout(go, 1200)
+    }))
+    return () => { cancelled = true; cancelAnimationFrame(raf); if (idleId !== undefined) w.cancelIdleCallback?.(idleId); if (t) clearTimeout(t) }
+  }, [mapReady, idle])
 
   const taken = useMemo(() => new Set(map.data?.taken ?? []), [map.data])
   const seatsById = useMemo(() => new Map(map.data?.hall.rows.flatMap((r) => r.seats.map((s) => [s.id, s] as const)) ?? []), [map.data])
@@ -114,7 +130,7 @@ export default function SeatsPage() {
           )}
         </div>
       )}
-      {map.data && threeOn && !lostNote && (
+      {map.data && threeOn && idle && !lostNote && (
         <div className={cn('absolute inset-0 transition-opacity duration-500', threeReady ? 'opacity-100' : 'opacity-0')}>
           <GLBoundary onError={() => setLostNote('3D view unavailable, showing simple view')}>
             <Suspense fallback={null}>

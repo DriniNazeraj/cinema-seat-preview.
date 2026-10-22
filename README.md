@@ -10,7 +10,8 @@ Design spec: [`docs/design.md`](docs/design.md).
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # typecheck + client build + SSR prerender into dist/
-npm run preview    # serves dist/ on 0.0.0.0:4174 like a static host
+npm run preview    # vite preview of dist/ on 0.0.0.0:4174 (plugin maps routes like a static host)
+npm run serve:prod [-- 4180]  # tiny no-deps static server (default port 4175): dist/<route>/index.html, else dist/200.html; use this for Lighthouse
 node scripts/screenshots.mjs   # headless screenshots (needs preview running)
 node scripts/flow-smoke.mjs    # seat -> booking -> confirmed smoke test
 ```
