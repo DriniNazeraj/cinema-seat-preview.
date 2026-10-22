@@ -2,7 +2,8 @@
  * Mock data layer — the ONLY place that knows where data comes from.
  * Everything here is PLACEHOLDER [PH]. When the real back end lands, swap the
  * function bodies for fetch() calls against docs/api.md; keep the zod schemas
- * and signatures so the UI doesn't change.
+ * and signatures so the UI doesn't change. Those schemas are duplicated in
+ * ./api-contract.ts (the shared contract). Keep the two copies identical.
  */
 import { z } from 'zod'
 
