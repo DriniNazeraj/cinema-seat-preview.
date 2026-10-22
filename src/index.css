@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+html { color-scheme: dark; background: #0B0B0F; }
+body { font-family: Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+
+/* §12 velvet option B: 7 KB tile + CSS lighting. #7A1F2B fallback so the curtain never flashes untextured. */
+.velvet-tex{background:#7A1F2B url(/velvet-tile.webp) repeat;background-size:176px 176px;}
+.velvet-tex::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(120% 70% at 50% -10%,rgba(255,200,150,.22),transparent 55%),linear-gradient(180deg,transparent 40%,rgba(0,0,0,.55)),radial-gradient(80% 60% at 50% 30%,transparent,rgba(0,0,0,.45));}
+.curtain{transition:transform 900ms cubic-bezier(0.65,0,0.35,1),opacity 300ms ease;will-change:transform;}
+@media (prefers-reduced-motion: reduce){.curtain{transition:opacity 300ms ease;}}
+
+/* fix7: self-hosted Bebas Neue (SIL OFL 1.1, public/fonts/BebasNeue-OFL.txt), Latin subset, regular only */
+@font-face{font-family:"Bebas Neue";src:url(/fonts/bebas-neue-latin.woff2) format("woff2");font-weight:400;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+/* metric fallback computed with fontTools vs Arial/Liberation Sans (same metrics): width over caps text, hhea ascent/descent */
+@font-face{font-family:"Bebas Fallback";src:local("Arial"),local("ArialMT"),local("Liberation Sans"),local("LiberationSans");size-adjust:56.76%;ascent-override:158.56%;descent-override:52.85%;line-gap-override:0%;}
+/* fix9: Inter self-hosted too (SIL OFL 1.1, public/fonts/Inter-OFL.txt): same latin variable woff2 Google served (wght 400-600).
+   The cross-origin Google CSS + preconnects kept FCP/LCP on the seats page at ~2.6 s in Lighthouse mobile. Not preloaded. */
+@font-face{font-family:"Inter";src:url(/fonts/inter-latin.woff2) format("woff2");font-weight:400 600;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
