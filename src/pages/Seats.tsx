@@ -54,6 +54,8 @@ export default function SeatsPage() {
   const [quick, setQuick] = useState(false) // chunk prefetched: no progress line, closed 150ms then open
   const [sheetOpen, setSheetOpen] = useState(false)
   const peekRef = useRef<HTMLButtonElement>(null)
+  // fix6: never start the 3D mount (shader compile) mid-slide; a mounted hall is frozen (paused) during the slide
+  const hallMounted = useRef(false)
 
   // No ?show= in the URL (e.g. a shared/bookmarked /movie/:id/seats link): pick the next bookable show
   // instead of dead-ending, keeping other params such as ?3d=1.
@@ -130,8 +132,8 @@ export default function SeatsPage() {
     if (selected.length >= MAX_SEATS) { setLimitMsg(true); return }
     booking.toggleSeat(seat.id)
     setFocusSeat(seat)
-    // §11.4: in 3D the sheet collapses to the peek bar so the camera fly is visible. Fallback keeps it open.
-    if (threeOn && threeReady && !lostNote) setSheetOpen(false)
+    // §11.4: the sheet collapses to the peek bar after a pick (3D: camera fly visible; simple: view-from-seat card visible).
+    setSheetOpen(false)
   }
 
   if (!showId) return (
@@ -168,18 +170,19 @@ export default function SeatsPage() {
       {/* hall layer: 3D canvas, or the static view-from-seat card (fallback) */}
       <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_0%,#2a0d12,#0B0B0F_70%)]">
         {map.data && fallback && (
-          <div className="absolute inset-0 grid place-items-center p-4 pb-20 pt-16 md:pr-[432px]">
+          <div className="absolute inset-0 grid place-items-center p-4 pb-20 pt-16 md:pr-[calc(min(480px,40vw)+32px)]">
             <div className="w-full max-w-3xl"><ViewFromSeatCard seat={lastSelected} hall={map.data.hall} note={lostNote ?? (decision?.mode === 'off' ? decision.reason : undefined)} /></div>
           </div>
         )}
-        {map.data && threeOn && idle && !lostNote && (
-          <div className={cn('absolute inset-0 transition-opacity duration-500', threeReady ? 'opacity-100' : 'opacity-0')}>
+        {map.data && threeOn && idle && !lostNote && (curtain !== 'opening' || hallMounted.current) && (hallMounted.current = true) && (
+          <div className={cn('absolute inset-0 transition-opacity duration-500', threeReady && !curtainsUp ? 'opacity-100' : 'invisible opacity-0')}
+            onTransitionEnd={(e) => { if (e.target === e.currentTarget && threeReady) performance.mark('lumen:hall-shown') }}>
             <GLBoundary onError={() => setLostNote('3D view unavailable, showing simple view')}>
               <Suspense fallback={null}>
                                   <HallScene3D hall={map.data.hall} taken={taken} selected={selected} focusSeat={focusSeat} hovered={hovered}
                     onPick={pick} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
                     onContextLost={() => setLostNote('3D view paused, showing simple view')}
-                  fpsGuard={fpsGuard} fpsForceSlow={fpsSlow} onStillSlow={slowToast}
+                  paused={curtain === 'opening'} fpsGuard={fpsGuard} fpsForceSlow={fpsSlow} onStillSlow={slowToast}
                   onReady={() => { performance.mark('lumen:hall-ready'); setThreeReady(true) }} />
               </Suspense>
             </GLBoundary>
@@ -246,7 +249,7 @@ export default function SeatsPage() {
       </SeatSheet>
       {/* peek bar: sheet collapsed, never fully hidden. Reserved h-16, fixed bottom. */}
       {!sheetOpen && !curtainsUp && (
-        <div className="fixed inset-x-0 bottom-0 z-[55] flex h-16 items-center gap-2 border-t border-border bg-surface/95 px-3 backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:w-[400px] md:rounded-2xl md:ring-1 md:ring-border">
+        <div className="fixed inset-x-0 bottom-0 z-[55] flex h-16 items-center gap-2 border-t border-border bg-surface/95 px-3 backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:w-[min(480px,40vw)] md:rounded-2xl md:ring-1 md:ring-border">
           <button ref={peekRef} onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 truncate text-left text-sm" aria-label={`Selected: ${seatLabel}. Open seat picker`}>
             <span className="font-semibold">{seatLabel}</span> · {eur(total)} [PH]
           </button>

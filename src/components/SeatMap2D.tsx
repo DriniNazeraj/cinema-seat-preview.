@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { Accessibility, Check, X } from 'lucide-react'
+import React, { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { Accessibility, Check, X, ZoomIn, ZoomOut } from 'lucide-react'
 import type { Hall, Seat } from '@/lib/api'
 import { cn, eur } from '@/lib/format'
 
@@ -31,8 +31,28 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
   const wrap = useRef<HTMLDivElement>(null)
   const ref = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
-  // start the (wide) mobile map centred on the middle block
-  useEffect(() => { const el = scroller.current; if (el) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2 }, [])
+  // fix6: interactive map fits the whole row to the panel width (1fr columns, 3px gap); pinch (or the zoom button) zooms
+  // to 44px seats. Seats under 20px hide their numbers (the tooltip / aria-label still give them).
+  const [zoomed, setZoomed] = useState(false)
+  const [cell, setCell] = useState(44)
+  const pinch = useRef<number | null>(null)
+  useEffect(() => {
+    const g = ref.current; if (compact || !g) return
+    const ro = new ResizeObserver(() => { const b = g.querySelector('[data-seat]'); if (b) setCell(Math.round(b.getBoundingClientRect().width)) })
+    ro.observe(g); return () => ro.disconnect()
+  }, [compact])
+  // when zooming in, keep the middle block in view
+  useEffect(() => { const el = scroller.current; if (el && zoomed) el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2 }, [zoomed])
+  const dist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
+  const touch = {
+    onTouchStart: (e: React.TouchEvent) => { if (e.touches.length === 2) pinch.current = dist(e.touches as unknown as TouchList) },
+    onTouchMove: (e: React.TouchEvent) => {
+      if (pinch.current === null || e.touches.length !== 2) return
+      const r = dist(e.touches as unknown as TouchList) / pinch.current
+      if (r > 1.15) { setZoomed(true); pinch.current = null } else if (r < 0.87) { setZoomed(false); pinch.current = null }
+    },
+    onTouchEnd: () => { pinch.current = null },
+  }
 
   function move(seat: Seat, dr: number, dc: number) {
     const ri = hall.rows.findIndex((r) => r.label === seat.row)
@@ -55,33 +75,44 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
   }
 
   // compact = read-only mini map. Interactive: 44px hit target on mobile (visual 28px inside), 18px on sm+.
-  const labelCls = compact ? 'w-3 text-center text-[10px] text-text-muted' : 'sticky z-10 w-5 self-stretch bg-surface text-center text-[10px] leading-[44px] text-text-muted sm:static sm:w-3 sm:leading-normal'
-  const hit = compact ? 'size-[14px] sm:size-4' : 'size-11 sm:size-[18px]'
-  const vis = compact ? 'size-full text-[8px]' : 'size-7 sm:size-full text-[10px] sm:text-[9px]'
+  const labelCls = compact ? 'w-3 text-center text-[10px] text-text-muted' : cn('z-10 bg-surface text-center text-[10px] text-text-muted', zoomed && 'sticky self-stretch leading-[44px]')
+  const hit = compact ? 'size-[14px] sm:size-4' : 'aspect-square w-full'
+  const vis = compact ? 'size-full text-[8px]' : cn('size-full', zoomed ? 'text-[11px]' : 'text-[9px]')
+  const showNum = !compact && cell >= 20
   return (
     <div className="relative" ref={wrap}>
       <div className="mx-auto mb-4 w-4/5">
         <div className="h-2 rounded-[50%/100%_100%_0_0] bg-gradient-to-b from-accent/80 to-transparent" />
         <p className="mt-1 text-center text-[10px] tracking-[0.4em] text-text-muted">SCREEN</p>
       </div>
-      {!compact && <p className="mb-2 text-center text-[11px] text-text-muted sm:hidden">Swipe or pinch to see all seats</p>}
+      {!compact && (
+        <div className="mb-2 flex items-center justify-center gap-2 text-[11px] text-text-muted">
+          <p className="sm:hidden">Swipe or pinch to see all seats</p>
+          <button type="button" onClick={() => setZoomed((z) => !z)} aria-pressed={zoomed} aria-label={zoomed ? 'Zoom out to fit the hall' : 'Zoom in on seats'}
+            className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-full px-2 ring-1 ring-border hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+            {zoomed ? <ZoomOut className="size-4" aria-hidden /> : <ZoomIn className="size-4" aria-hidden />}<span>{zoomed ? 'Fit' : 'Zoom'}</span>
+          </button>
+        </div>
+      )}
       <div className="relative">
-      {!compact && <>
+      {!compact && zoomed && <>
         <span aria-hidden className="pointer-events-none absolute inset-y-0 left-5 z-10 w-4 bg-gradient-to-r from-surface to-transparent sm:hidden" />
         <span aria-hidden className="pointer-events-none absolute inset-y-0 right-5 z-10 w-4 bg-gradient-to-l from-surface to-transparent sm:hidden" />
       </>}
-      <div ref={scroller} className="overflow-x-auto overscroll-x-contain pb-2 [touch-action:pan-x_pan-y_pinch-zoom]">
-        <div ref={ref} role="grid" data-seatgrid aria-label={`Seat map, ${hall.name}`} aria-readonly={readOnly || undefined} className={cn('mx-auto flex w-max flex-col', compact ? 'gap-[3px] sm:gap-1' : 'gap-0 sm:gap-1')}>
+      <div ref={scroller} {...(compact ? {} : touch)} className={cn('overflow-x-auto overscroll-x-contain pb-2', compact ? '[touch-action:pan-x_pan-y_pinch-zoom]' : '[touch-action:pan-x_pan-y]')}>
+        <div ref={ref} role="grid" data-seatgrid aria-label={`Seat map, ${hall.name}`} aria-readonly={readOnly || undefined} className={cn('mx-auto flex flex-col', compact ? 'w-max gap-[3px] sm:gap-1' : 'gap-[3px]')}
+          style={compact ? undefined : { width: zoomed ? (hall.columns + 2) * 47 : '100%' }}>
           {hall.rows.map((row) => (
-            <div role="row" key={row.label} className={cn('flex items-center', compact ? 'gap-[2px] sm:gap-1' : 'gap-0 sm:gap-1')}>
+            <div role="row" key={row.label} className={cn(compact ? 'flex items-center gap-[2px] sm:gap-1' : 'grid items-center gap-[3px]')}
+              style={compact ? undefined : { gridTemplateColumns: `repeat(${hall.columns + 2}, minmax(0, 1fr))` }}>
               <span className={cn(labelCls, 'left-0')} aria-hidden>{row.label}</span>
               {Array.from({ length: hall.columns }, (_, x) => {
                 const seat = row.seats.find((s) => s.x === x)
-                if (!seat) return <span key={x} className={cn(compact ? 'w-2 sm:w-3' : 'w-5 sm:w-3', 'shrink-0')} aria-hidden />
+                if (!seat) return <span key={x} className={cn(compact ? 'w-2 sm:w-3 shrink-0' : '')} aria-hidden />
                 const st = seatStatus(seat, taken, selected)
                 const access = seat.type === 'access'
                 return (
-                  <span role="gridcell" key={seat.id}>
+                  <span role="gridcell" key={seat.id} className={compact ? undefined : 'block min-w-0'}>
                     <button
                       data-seat={seat.id}
                       tabIndex={readOnly ? -1 : seat.id === focusId ? 0 : -1}
@@ -105,7 +136,7 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
                         st === 'selected' ? 'bg-accent text-accent-fg' : st === 'taken' ? 'bg-taken/50 text-text-muted' : access ? 'bg-access text-white group-hover:ring-2 group-hover:ring-accent' : 'bg-velvet text-text/70 group-hover:ring-2 group-hover:ring-accent group-hover:brightness-125',
                         shakeId === seat.id && 'animate-shake',
                       )}>
-                        {st === 'taken' ? <X className="size-3" /> : access ? <Accessibility className="size-3" /> : st === 'selected' ? <Check className="size-3" /> : compact ? null : seat.n}
+                        {st === 'taken' ? <X className="size-3" /> : access ? <Accessibility className="size-3" /> : st === 'selected' ? <Check className="size-3" /> : showNum ? seat.n : null}
                       </span>
                     </button>
                   </span>

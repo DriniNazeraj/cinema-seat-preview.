@@ -14,11 +14,13 @@ export function Layout() {
     window.scrollTo(0, 0)
     if (!/\/seats$/.test(loc.pathname)) document.title = metaFor(loc.pathname).title
   }, [loc.pathname])
+  // fix6: the seat route is a full-screen fixed layer; header/footer behind it only added CLS (font swap) and tab stops
+  const seatRoute = /\/seats\/?$/.test(loc.pathname)
   const link = 'rounded-full px-3 py-2 text-sm text-text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent'
   return (
     <div className="flex min-h-svh flex-col">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-accent focus:px-3 focus:py-2 focus:text-accent-fg">Skip to content</a>
-      <header className="sticky top-0 z-40 border-b border-border bg-bg/80 backdrop-blur">
+      <header hidden={seatRoute} className="sticky top-0 z-40 border-b border-border bg-bg/80 backdrop-blur">
         <Container className="flex h-16 items-center justify-between">
           <Link to="/" className="font-display text-3xl tracking-wide text-text">
             LUMEN<span className="ml-1 align-top text-[10px] font-sans text-text-muted">[PH]</span>
@@ -41,7 +43,7 @@ export function Layout() {
         </Container>
       </header>
       <main id="main" className={/\/seats\/?$/.test(loc.pathname) ? 'min-h-[115svh] flex-1' : 'flex-1'}><Outlet /></main>
-      <footer id="about" className="border-t border-border py-12 text-sm text-text-muted">
+      <footer id="about" hidden={seatRoute} className="border-t border-border py-12 text-sm text-text-muted">
         <Container className="grid gap-6 md:grid-cols-3">
           <div><p className="font-display text-2xl tracking-wide text-text">LUMEN CINEMA [PH]</p><p>1 Placeholder Street, Tirana [PH]</p></div>
           <div><p className="text-text">Hours [PH]</p><p>Mon–Sun · 12:00–24:00</p></div>

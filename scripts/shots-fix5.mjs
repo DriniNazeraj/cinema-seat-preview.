@@ -1,6 +1,6 @@
 // fix5: flow screenshots + loading-screen timing (software WebGL). Needs npm run serve:prod on 4175.
 import { chromium } from 'playwright'
-const BASE = 'http://localhost:4175', OUT = '/workspace/cinema/final/flow-shots'
+const BASE = 'http://localhost:4175', OUT = process.env.OUT || '/workspace/cinema/final/flow-shots'
 const URL = BASE + '/movie/starlight-run/seats?3d=1'
 const b = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] })
 const vps = { desktop: { width: 1440, height: 900 }, mobile: { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } }
@@ -11,7 +11,7 @@ for (const [name, vp] of Object.entries(vps)) {
   // screenshots
   { const c = await b.newContext({ viewport: { width, height }, ...rest }); const p = await c.newPage()
     await p.goto(URL); await p.waitForSelector('[data-curtains="closed"]', { state: 'attached' }); await p.waitForTimeout(150); await p.screenshot({ path: `${OUT}/1-curtains-closed-${name}.png` })
-    await p.waitForSelector('[data-curtains="opening"]', { timeout: 20000, state: 'attached' }); await p.waitForTimeout(500); await p.screenshot({ path: `${OUT}/2-curtains-mid-open-${name}.png` })
+    // mid-open frame: see scripts/shot-midopen.mjs (the 1s slide is shorter than a software-GL screenshot)
     await p.waitForSelector('[role="dialog"]', { timeout: 15000 }); await p.waitForTimeout(800); await p.screenshot({ path: `${OUT}/3-hall-fullscreen-sheet-${name}.png` })
     const free = p.locator('[role="dialog"] [data-seat][aria-label*="free"]').nth(40); await free.click(); await p.waitForTimeout(1200)
     await p.screenshot({ path: `${OUT}/4-hall-peek-after-pick-${name}.png` })

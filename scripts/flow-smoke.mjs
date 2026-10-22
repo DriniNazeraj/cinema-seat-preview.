@@ -4,6 +4,8 @@ p.on('pageerror', e => errs.push(e.message))
 await p.goto('http://localhost:4174/movie/neon-alley')
 await p.locator('main section button:not([disabled]):has-text("€")').first().click(); await p.waitForURL(/seats/)
 await p.locator('[data-seat][aria-label*="free"]').nth(5).click()
+// fix6: simple view collapses to the peek bar after a pick (same as 3D); reopen it
+await p.getByRole('button', { name: 'Change seats' }).click()
 await p.locator('[data-seat][aria-label*="free"]').nth(5).press('ArrowRight')
 await p.keyboard.press('Enter')
 await p.getByRole('button', { name: 'Continue' }).last().click(); await p.waitForURL(/booking/)

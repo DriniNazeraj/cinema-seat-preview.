@@ -112,7 +112,7 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover }: Pick<HallSce
   )
 }
 
-function Room({ hall }: { hall: Hall }) {
+function Room({ hall, low }: { hall: Hall; low?: boolean }) {
   const rows = hall.rows.length
   const width = hall.columns * SPACING_X + 3
   const screenTex = useMemo(() => {
@@ -158,7 +158,7 @@ function Room({ hall }: { hall: Hall }) {
       <mesh position={[0, SCREEN.y, SCREEN.z]}><planeGeometry args={[SCREEN.w, SCREEN.h]} /><meshBasicMaterial ref={mat} map={screenTex} toneMapped={false} /></mesh>
       <mesh position={[0, SCREEN.y, SCREEN.z - 0.05]}><planeGeometry args={[SCREEN.w + 0.4, SCREEN.h + 0.4]} /><meshBasicMaterial color="#050507" /></mesh>
       <pointLight position={[0, SCREEN.y, 2]} intensity={60} distance={30} color="#f6dcb0" />
-      {[-1, 1].map((s) => [6, 10, 14].map((z) => <pointLight key={`${s}${z}`} position={[s * (width / 2), 0.6, z]} intensity={1.2} distance={4} color="#F2B544" />))}
+      {!low && [-1, 1].map((s) => [6, 10, 14].map((z) => <pointLight key={`${s}${z}`} position={[s * (width / 2), 0.6, z]} intensity={1.2} distance={4} color="#F2B544" />))}
       <ambientLight intensity={0.5} />
       <hemisphereLight args={["#f6dcb0", "#0B0B0F", 0.6]} />
     </group>
@@ -252,33 +252,38 @@ function FpsGuard({ onSlow, forceSlow }: { onSlow: () => void; forceSlow?: boole
   return null
 }
 
-export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; fpsGuard?: boolean; fpsForceSlow?: boolean; onStillSlow?: () => void }) {
+export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; fpsGuard?: boolean; fpsForceSlow?: boolean; onStillSlow?: () => void; paused?: boolean }) {
   const maxDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2)
   const [dpr, setDpr] = useState(maxDpr)
-  // stage 0: full quality; 1: DPR 1 + no antialias/shadows (Canvas remounts, a GL context can't drop MSAA live); 2: told parent
+  // §14 stage 0: full quality; 1: quality dropped IN PLACE (DPR 1 -> 0.75 on hi-dpi phones, no adaptive incline,
+  // no extra point lights) on the same Canvas/GL context, no remount; 2: still slow -> told parent (one-time toast).
   const [stage, setStage] = useState(0)
   const low = stage > 0
-  const swapping = useRef(false) // old canvas loses its context on the quality-drop remount; not a real loss
+  const lowDpr = maxDpr > 1.5 ? 0.75 : 1
   return (
+    <div data-quality={low ? 'low' : 'full'} className="size-full">
     <Canvas
-      key={low ? 'low' : 'full'}
-      dpr={low ? 1 : dpr}
+      dpr={low ? lowDpr : dpr}
+      // fix6: frozen while the curtains slide, so software/weak GPUs give the compositor the whole frame budget
+      frameloop={p.paused ? 'never' : 'always'}
       camera={{ fov: 55, near: 0.1, far: 80 }}
-      gl={{ antialias: !p.phone && !low, powerPreference: 'high-performance' }}
+      gl={{ antialias: !p.phone, powerPreference: 'high-performance' }}
       shadows={false}
       onCreated={({ gl, scene }) => {
+        const w = window as Window & { __lumenGL?: number }; w.__lumenGL = (w.__lumenGL ?? 0) + 1 // QA: GL contexts created
         scene.background = new THREE.Color('#0B0B0F')
         scene.fog = new THREE.Fog('#0B0B0F', 18, 40)
-        gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); if (!swapping.current) p.onContextLost() })
+        gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); p.onContextLost() })
       }}
       style={{ touchAction: 'pan-y' }}
     >
-      <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(maxDpr)} />
-      {p.fpsGuard && stage < 2 && <FpsGuard key={stage} forceSlow={p.fpsForceSlow} onSlow={() => { if (stage === 0) { swapping.current = true; setTimeout(() => { swapping.current = false }, 1500); setStage(1) } else { setStage(2); p.onStillSlow?.() } }} />}
-      <Room hall={p.hall} />
+      {!low && <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(maxDpr)} />}
+      {p.fpsGuard && stage < 2 && <FpsGuard key={stage} forceSlow={p.fpsForceSlow} onSlow={() => { if (stage === 0) setStage(1); else { setStage(2); p.onStillSlow?.() } }} />}
+      <Room hall={p.hall} low={low} />
       <Seats {...p} />
       <FirstFrame onReady={p.onReady} />
       <CameraRig hall={p.hall} focusSeat={p.focusSeat} resetKey={p.resetKey} instant={p.instant} />
     </Canvas>
+    </div>
   )
 }

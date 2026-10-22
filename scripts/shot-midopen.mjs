@@ -7,6 +7,6 @@ for (const [name, vp] of Object.entries({ desktop: { viewport: { width: 1440, he
   // software WebGL makes a 1440px screenshot take >1s, so the 3D chunk is blocked here: curtains open at the 2.5s cap onto the hall backdrop
   await p.route(/HallScene3D/, (r) => r.abort())
   await p.goto('http://localhost:4175/movie/starlight-run/seats?3d=1'); await p.waitForSelector('[data-curtains="opening"]', { state: 'attached', timeout: 20000 })
-  await p.waitForTimeout(900); await p.screenshot({ path: `/workspace/cinema/final/flow-shots/2-curtains-mid-open-${name}.png` }); await c.close()
+  await p.waitForTimeout(900); await p.screenshot({ path: `${process.env.OUT || '/workspace/cinema/final/flow-shots'}/2-curtains-mid-open-${name}.png` }); await c.close()
 }
 await b.close()
