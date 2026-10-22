@@ -1,9 +1,13 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, Component, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ArrowLeft, Box, ChevronLeft, ChevronRight, Eye, RotateCcw, Users } from 'lucide-react'
+import { ArrowLeft, Box, ChevronLeft, ChevronRight, LayoutGrid, RotateCcw, Users, X } from 'lucide-react'
 import { createHold, getMovie, getSeatMap, listShows, MAX_SEATS, SeatTakenError, type Seat } from '@/lib/api'
-import { placeGroup, rangeLabel, rowsWithRun, shiftGroup, shiftTarget } from '@/lib/group'
+import { rangeLabel } from '@/lib/group-label'
+// fix12 (TBT): group placement maths load lazily, on the first tap / hover on the map or 3D preview, never at startup
+type GroupLib = typeof import('@/lib/group')
+let groupLib: GroupLib | null = null
+const loadGroup = () => import('@/lib/group').then((m) => (groupLib = m))
 import { useData } from '@/lib/useData'
 import { useBooking } from '@/lib/booking'
 import { decideThree, isPhone, type ThreeDecision } from '@/lib/device'
@@ -58,6 +62,14 @@ export default function SeatsPage() {
   const [extraTaken, setExtraTaken] = useState<string[]>([]) // SEAT_TAKEN at Continue
   const [mapKey, setMapKey] = useState(0)
   const [holding, setHolding] = useState(false)
+  // fix12 §15.z: a 3D tap only previews one seat (never selects); 2D map is the only place that selects
+  const [preview3D, setPreview3D] = useState<Seat | null>(null)
+  const [hint3D, setHint3D] = useState<string | null>(null)
+  const [hover2D, setHover2D] = useState<Seat | null>(null)
+  const [G, setG] = useState<GroupLib | null>(groupLib)
+  const leaving3D = useRef(false) // unmounting the canvas on a switch to Simple fires webglcontextlost; that is not a failure
+  const needG = () => { if (!G) void loadGroup().then(setG) }
+  useEffect(() => { if (booking.seats.length) needG() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const [curtain, setCurtain] = useState<CurtainPhase>('closed')
   const [progress, setProgress] = useState(0)
   // §14 fps guard: ?3d=1 or ?nofps=1 turn it off; ?fps=slow forces it on and simulates <30fps (QA for the toast)
@@ -110,6 +122,12 @@ export default function SeatsPage() {
   // fix9: the prerendered static curtain (outside #root, see scripts/prerender.ts) goes once the real curtains are gone
   useEffect(() => { if (curtain === 'gone') document.getElementById('seat-static')?.remove() }, [curtain])
   useEffect(() => () => document.getElementById('seat-static')?.remove(), [])
+  // fix12 (SEO LCP): curtains stay plain #7A1F2B until the real content (title overlay) has painted, then the velvet tile goes on
+  useEffect(() => {
+    const h = document.documentElement; if (h.classList.contains('no3d')) return
+    let r2 = 0; const r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => h.classList.add('curtains-on')) })
+    return () => { cancelAnimationFrame(r1); cancelAnimationFrame(r2) }
+  }, [])
   useEffect(() => { if (!sheetOpen && curtain === 'gone') peekRef.current?.focus({ preventScroll: true }) }, [sheetOpen, curtain])
   useEffect(() => { if (movie.data) document.title = `Choose seats · ${movie.data.title} [PH] | Lumen Cinema [PH]` }, [movie.data])
 
@@ -135,6 +153,10 @@ export default function SeatsPage() {
   const party = booking.partySize
   const announce = (ids: string[]) => setSay(ids.length ? `${rangeLabel(ids, seatsById)} selected, ${ids.length} seat${ids.length === 1 ? '' : 's'} [PH]` : 'No seats selected [PH]')
   function pick(seat: Seat) {
+    if (!G) { void loadGroup().then((m) => { setG(m); pickWith(m, seat) }); return }
+    pickWith(G, seat)
+  }
+  function pickWith(G: GroupLib, seat: Seat) {
     if (taken.has(seat.id)) {
       setShake(seat.id); setTimeout(() => setShake(null), 600)
       toast("That seat's taken")
@@ -144,59 +166,78 @@ export default function SeatsPage() {
       // Split mode: one seat per tap (wheelchair spaces only here), tap a picked seat to remove it
       if (selected.includes(seat.id)) {
         const ids = selected.filter((x) => x !== seat.id); booking.setSeats(ids); setLimitMsg(false); announce(ids)
-        const prev = ids.length ? seatsById.get(ids[ids.length - 1]) ?? null : null // camera stays on the last still-picked seat
-        if (prev) setFocusSeat(prev); else { setFocusSeat(null); setResetKey((k) => k + 1) }
         return
       }
       if (selected.length >= party) { setLimitMsg(true); setTimeout(() => setLimitMsg(false), 3000); return }
-      const ids = [...selected, seat.id]; booking.setSeats(ids); announce(ids); setFocusSeat(seat)
+      const ids = [...selected, seat.id]; booking.setSeats(ids); announce(ids)
       if (ids.length === party) setShortK(null)
       return
     }
     if (selected.includes(seat.id)) return // tapping a seat already in the block does nothing
-    const g = placeGroup(map.data!.hall, seat, party, taken)
+    const g = G.placeGroup(map.data!.hall, seat, party, taken)
     if (!g.ids.length) { // wheelchair space in group mode: never auto-included
       setShortK(0); setSay('Wheelchair spaces are picked one at a time. Choose Split the group [PH]'); return
     }
-    booking.setSeats(g.ids); setFocusSeat(seat)
+    booking.setSeats(g.ids); setPreview3D(null)
     if (g.short) { setShortK(g.ids.length); setSay(`Only ${g.ids.length} seat${g.ids.length === 1 ? '' : 's'} together here [PH]`) }
     else { setShortK(null); announce(g.ids) }
-    // §11.4: the sheet collapses to the peek bar after a pick (3D: camera fly visible; simple: view-from-seat card visible).
-    setSheetOpen(false)
+    // §11.4: the sheet collapses to the peek bar after a full pick; fix12: it stays open on a short run (Find/Split panel is 2D-only)
+    if (!g.short) setSheetOpen(false)
   }
-  const shiftL = map.data && !split ? shiftTarget(map.data.hall, selected, -1, taken, seatsById) : null
-  const shiftR = map.data && !split ? shiftTarget(map.data.hall, selected, 1, taken, seatsById) : null
+  const shiftL = G && map.data && !split && selected.length === party ? G.shiftTarget(map.data.hall, selected, -1, taken, seatsById) : null
+  const shiftR = G && map.data && !split && selected.length === party ? G.shiftTarget(map.data.hall, selected, 1, taken, seatsById) : null
   function shift(dir: -1 | 1) {
     const t = dir === 1 ? shiftR : shiftL
     if (!t || selected.length < party) return
-    const ids = shiftGroup(selected, dir, t, seatsById); booking.setSeats(ids); announce(ids)
-    const mid = seatsById.get(ids[Math.floor(ids.length / 2)]); if (mid) setFocusSeat(mid)
+    if (!G) return
+    const ids = G.shiftGroup(selected, dir, t, seatsById); booking.setSeats(ids); announce(ids)
   }
-  function toFit() { setFocusSeat(null); setResetKey((k) => k + 1); resetSeatMapZoom(); setMapKey((k) => k + 1) }
-  function clearPicks() { booking.releaseHold(); booking.setSeats([]); setSplit(false); setShortK(null); setLimitMsg(false); toFit() }
+  // fix12: map back to fit only; the camera never re-centres automatically (Reset view is the only way back)
+  function toFit() { resetSeatMapZoom(); setMapKey((k) => k + 1) }
+  function clearPicks() { booking.releaseHold(); booking.setSeats([]); setPreview3D(null); setSplit(false); setShortK(null); setLimitMsg(false); toFit() }
   function changeSeats() { clearPicks(); setSay('Pick a seat for your group [PH]'); setSheetOpen(true) }
   function findTogether() {
     clearPicks(); setSheetOpen(true)
-    const rows = new Set(rowsWithRun(map.data!.hall, party, taken)); setPulseRows(rows); setTimeout(() => setPulseRows(undefined), 1500)
+    const rows = new Set(G ? G.rowsWithRun(map.data!.hall, party, taken) : []); setPulseRows(rows); setTimeout(() => setPulseRows(undefined), 1500)
     setSay(rows.size ? `Rows ${[...rows].join(', ')} have ${party} seats together [PH]` : `No ${party} seats together for this show [PH]`)
   }
   function startSplit() { setSplit(true); setShortK(null); setSay(`${selected.length} of ${party} picked. Tap to add the rest one at a time [PH]`); setSheetOpen(true) }
+  /** fix12 §15.z: 3D tap = preview one seat. Camera stays. Taken / wheelchair = inline hint, no outline. */
+  function preview(seat: Seat) {
+    setHint3D(null)
+    if (taken.has(seat.id)) { setHint3D('Taken [PH]'); setTimeout(() => setHint3D(null), 3000); return }
+    if (seat.type === 'access') { setHint3D('Wheelchair space, needs a Disability ticket [PH]'); setTimeout(() => setHint3D(null), 3000); return }
+    if (preview3D?.id === seat.id) { setPreview3D(null); setSay('Preview cleared [PH]'); return }
+    needG(); setPreview3D(seat); setSay(`Previewing ${seat.id}. Press ${party === 1 ? 'Continue to select' : 'Use this seat'}. [PH]`)
+  }
+  /** party >= 2: place the group around the previewed seat (§15.y) and switch to the 2D map */
+  function useThisSeat() {
+    const s = preview3D; if (!s || !map.data) return
+    setPreview3D(null); setSplit(false); booking.releaseHold()
+    if (!G) { void loadGroup().then(setG); return }
+    const g = G.placeGroup(map.data.hall, s, party, taken)
+    booking.setSeats(g.ids)
+    if (g.short) { setShortK(g.ids.length); setSay(`Only ${g.ids.length} seat${g.ids.length === 1 ? '' : 's'} together here [PH]`) } else { setShortK(null); announce(g.ids) }
+    setSheetOpen(true)
+  }
   async function goContinue() {
-    if (selected.length !== party || holding) return
+    const ids = preview3D && party === 1 ? [preview3D.id] : selected // party of 1: Continue selects the previewed seat
+    if (ids.length !== party || holding) return
     setHolding(true)
     try {
-      const h = await createHold(showId, selected); booking.setHold(h.id, h.holdExpiresAt); nav('/booking')
+      if (ids !== selected) booking.setSeats(ids)
+      const h = await createHold(showId, ids); booking.setHold(h.id, h.holdExpiresAt); nav('/booking')
     } catch (e) {
       if (e instanceof SeatTakenError) {
         const lost = e.seatIds
         toast(lost.length === 1 ? `${lost[0]} was just taken, pick another [PH]` : `${lost.slice(0, -1).join(', ')} and ${lost[lost.length - 1]} were just taken [PH]`, { duration: 6000, closeButton: true })
-        setExtraTaken((x) => [...x, ...lost]); booking.setSeats([]); setSplit(false); setShortK(null) // camera stays on that row
+        setExtraTaken((x) => [...x, ...lost]); booking.setSeats([]); setPreview3D(null); setSplit(false); setShortK(null) // camera stays on that row
         setSay(`${lost.join(', ')} just taken, pick again [PH]`)
       } else toast("Couldn't reach the cinema, try again [PH]")
     } finally { setHolding(false) }
   }
-  const noRun = !!map.data && rowsWithRun(map.data.hall, party, taken).length === 0
-  const preview = !split && hovered && map.data && !selected.includes(hovered.id) && !taken.has(hovered.id) ? new Set(placeGroup(map.data.hall, hovered, party, taken).ids) : undefined
+  const noRun = !!G && !!map.data && partyStep && G.rowsWithRun(map.data.hall, party, taken).length === 0
+  const ghost = !split && hover2D && map.data && !selected.includes(hover2D.id) && !taken.has(hover2D.id) && G ? new Set(G.placeGroup(map.data.hall, hover2D, party, taken).ids) : undefined
   const groupLabel = !selected.length ? 'Pick a seat for your group [PH]' : selected.length < party ? `${selected.length} of ${party} picked [PH]` : `${rangeLabel(selected, seatsById).replace(' to ', '-')} · ${selected.length} seat${selected.length === 1 ? '' : 's'} [PH]`
 
   if (!showId) return (
@@ -212,15 +253,31 @@ export default function SeatsPage() {
   const fallback = !threeOn || !!lostNote
   const total = selected.length * price
 
+  const noGL = decision?.reason === 'Your browser has 3D turned off'
+  /** fix12 §15.w: switch keeps party, picks and hold; flips ?simple=1 with replaceState; persists (lumen.simple); never locks into Simple */
+  function setView(v: '3d' | 'simple') {
+    const u = new URL(location.href)
+    if (v === 'simple') { leaving3D.current = true; localStorage.setItem('lumen.simple', '1'); u.searchParams.set('simple', '1'); setPreview3D(null); setThreeOn(false) } // 3D preview is not a pick
+    else {
+      localStorage.removeItem('lumen.simple'); u.searchParams.delete('simple'); sessionStorage.removeItem('lumen.slowtoast') // fps toast may show again
+      leaving3D.current = false; setLostNote(null); setThreeOn(true)
+    }
+    history.replaceState(history.state, '', u.pathname + u.search + u.hash)
+    setSay(v === 'simple' ? 'Simple view [PH]' : '3D view [PH]')
+  }
   function slowToast() {
     if (sessionStorage.getItem('lumen.slowtoast') === '1') return
     sessionStorage.setItem('lumen.slowtoast', '1')
     toast('Running slow? Switch to simple view', {
       position: 'bottom-center', className: 'mb-16', duration: Infinity, closeButton: true,
-      action: { label: 'Switch', onClick: () => { localStorage.setItem('lumen.simple', '1'); setThreeOn(false) } },
+      action: { label: 'Switch', onClick: () => setView('simple') },
     })
   }
   const seatLabel = groupLabel
+  // peek bar: line 1 seats, line 2 count + price (fits next to the buttons at 390px)
+  const full = selected.length === party && selected.length > 0
+  const peekTop = full ? rangeLabel(selected, seatsById).replace(' to ', '-') : groupLabel
+  const peekSub = full ? `${selected.length} seat${selected.length === 1 ? '' : 's'} · ${eur(total)} [PH]` : `${eur(total)} [PH]`
   const showLine = show ? `${dayLabel(show.start)} · ${time(show.start)} · ${show.format} · ${map.data?.hall.name}` : '\u00a0'
   const curtainsUp = curtain !== 'gone'
   const titleText = <>{movie.data?.title ?? '…'} <span className="text-base text-text-muted">[PH]</span></>
@@ -243,8 +300,8 @@ export default function SeatsPage() {
             <GLBoundary onError={() => setLostNote('3D view unavailable, showing simple view')}>
               <Suspense fallback={null}>
                                   <HallScene3D hall={map.data.hall} taken={taken} selected={selected} focusSeat={focusSeat} hovered={hovered}
-                    onPick={pick} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
-                    onContextLost={() => setLostNote('3D view paused, showing simple view')}
+                    preview={preview3D} onPick={preview} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
+                    onContextLost={() => { if (!leaving3D.current) setLostNote('3D view paused, showing simple view') }}
                   paused={curtain === 'opening'} applyLooks={curtain === 'gone'} fpsGuard={fpsGuard} fpsForceSlow={fpsSlow} onStillSlow={slowToast}
                   onReady={() => { performance.mark('lumen:hall-ready'); setThreeReady(true) }} />
               </Suspense>
@@ -270,14 +327,21 @@ export default function SeatsPage() {
             <RotateCcw className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Reset view</span>
           </button>
         )}
-        {threeOn && !lostNote && (
-          <button onClick={() => { localStorage.setItem('lumen.simple', '1'); setThreeOn(false) }} aria-label="Simple view" className={iconBtn}>
-            <Eye className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Simple view</span>
-          </button>
-        )}
-        {decision?.mode === 'on-demand' && !threeOn && (
-          <button onClick={() => setThreeOn(true)} aria-label="Preview in 3D" className={iconBtn}><Box className="size-4" aria-hidden /> <span className="hidden md:inline">Preview in 3D</span></button>
-        )}
+        {/* fix12 §15.w: Hall view switch, 3D | Simple, always visible (phone + desktop) */}
+        <div role="radiogroup" aria-label="Hall view" data-viewswitch className="flex shrink-0 items-center rounded-full bg-bg/70 p-0.5 ring-1 ring-border">
+          {([['3d', '3D', Box], ['simple', 'Simple', LayoutGrid]] as const).map(([v, label, Icon]) => {
+            const on = v === '3d' ? !fallback : fallback
+            const disabled = v === '3d' && noGL
+            return (
+              <label key={v} title={disabled ? 'Your browser has 3D turned off' : undefined}
+                className={cn('relative inline-flex h-9 cursor-pointer items-center gap-1 rounded-full px-3 text-xs font-medium after:absolute after:-inset-x-0.5 after:-inset-y-1 after:content-[""] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent',
+                  on ? 'bg-accent text-accent-fg' : 'text-text hover:bg-surface-2', disabled && 'cursor-not-allowed opacity-50')}>
+                <input type="radio" name="hallview" value={v} checked={on} disabled={disabled} onChange={() => setView(v)} className="sr-only" />
+                <Icon className="size-4" aria-hidden />{label}
+              </label>
+            )
+          })}
+        </div>
       </div>
 
       {curtainsUp && <Curtains phase={curtain} progress={progress} hideLine={quick} onGone={() => { performance.mark('lumen:curtain-gone'); if (reduceMotion && threeReady) performance.mark('lumen:hall-shown'); setCurtain('gone'); setTimeout(() => setSheetOpen(true), 200) }} />}
@@ -298,7 +362,8 @@ export default function SeatsPage() {
         <Button className="min-h-11 w-full" onClick={() => { setPartyStep(false); setSay(`Pick a seat for your group of ${party} [PH]`) }}>Choose seats [PH]</Button>
       ) : (
         <div className="flex items-center justify-between gap-3">
-          <p className="min-w-0 truncate text-sm"><span data-card className="font-semibold">{seatLabel}</span>{selected.length > 0 && <> · {eur(total)} [PH]</>}</p>
+          <p className="min-w-0 flex-1 truncate text-sm"><span data-card className="font-semibold">{seatLabel}</span>{selected.length > 0 && <> · {eur(total)} [PH]</>}</p>
+          {!split && selected.length === party && <ShiftButtons onShift={shift} canL={!!shiftL} canR={!!shiftR} />}
           <Button className="min-h-11" disabled={selected.length !== party || holding} onClick={goContinue}>Continue</Button>
         </div>
       )}>
@@ -308,7 +373,7 @@ export default function SeatsPage() {
             <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
               {Array.from({ length: MAX_SEATS }, (_, i) => i + 1).map((n) => (
                 <label key={n} className="relative">
-                  <input type="radio" name="party" value={n} checked={party === n} onChange={() => booking.setPartySize(n)} className="peer sr-only" />
+                  <input type="radio" name="party" value={n} checked={party === n} onChange={() => { needG(); booking.setPartySize(n) }} className="peer sr-only" />
                   <span className="grid min-h-11 cursor-pointer place-items-center rounded-xl bg-surface-2 text-xl font-semibold tabular-nums ring-1 ring-border peer-checked:bg-accent peer-checked:text-accent-fg peer-focus-visible:ring-2 peer-focus-visible:ring-accent">{n}</span>
                 </label>
               ))}
@@ -318,7 +383,7 @@ export default function SeatsPage() {
         ) : !map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-10 sm:h-6" />)}</div> : (
           <>
             <div className="mb-3 flex items-center justify-between gap-2">
-              <button type="button" data-party-chip onClick={() => { clearPicks(); setPartyStep(true) }} aria-label={`${party} ${party === 1 ? 'person' : 'people'}. Change group size`}
+              <button type="button" data-party-chip onClick={() => { clearPicks(); setPartyStep(true) }} aria-label={`${party} ${party === 1 ? 'person' : 'people'}, change group size`}
                 className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-surface-2 px-4 text-sm ring-1 ring-border hover:bg-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                 <Users className="size-4" aria-hidden /> {party} {party === 1 ? 'person' : 'people'} [PH]
               </button>
@@ -326,7 +391,7 @@ export default function SeatsPage() {
               {split && selected.length < party && <p className="text-sm text-text-muted">{selected.length} of {party} picked [PH]</p>}
             </div>
             {shortK !== null && <ShortPanel k={shortK} party={party} onFind={findTogether} onSplit={startSplit} />}
-            <SeatMap2D key={mapKey} preview={preview} pulseRows={pulseRows} onShift={shift} hall={map.data.hall} taken={taken} selected={selected} price={price} onPick={pick} onHover={setHovered} shakeId={shake} compact={false} />
+            <SeatMap2D key={mapKey} preview={ghost} pulseRows={pulseRows} onShift={shift} hall={map.data.hall} taken={taken} selected={selected} price={price} onPick={pick} onHover={(s) => { needG(); setHover2D(s); setHovered(s) }} shakeId={shake} compact={false} />
             <div className="mt-4"><SeatLegend /></div>
             {soldOut && <div className="mt-4 rounded-xl bg-surface-2 p-4 text-sm">This show is sold out. <Link to={`/movie/${id}`} className="ml-1 text-accent underline">Try another time</Link></div>}
             {limitMsg && <p className="mt-3 text-sm text-danger" role="alert">{party >= MAX_SEATS ? `Max ${MAX_SEATS} seats per booking [PH]` : `All ${party} seats picked. Tap one to remove it first [PH]`}</p>}
@@ -335,20 +400,24 @@ export default function SeatsPage() {
         )}
       </SeatSheet>
       {/* peek bar: sheet collapsed, never fully hidden. Reserved h-16, fixed bottom. */}
-      {!sheetOpen && !curtainsUp && shortK !== null && (
-        <div className="fixed inset-x-3 bottom-[4.5rem] z-[56] md:inset-x-auto md:right-4 md:bottom-24 md:w-[min(480px,40vw)]"><ShortPanel k={shortK} party={party} onFind={findTogether} onSplit={startSplit} /></div>
-      )}
-      {!sheetOpen && !curtainsUp && !partyStep && (
+      {!sheetOpen && !curtainsUp && hint3D && <p data-hint3d role="status" className="fixed inset-x-3 bottom-[4.5rem] z-[56] rounded-xl bg-surface-2 px-3 py-2 text-sm ring-1 ring-border md:inset-x-auto md:right-4 md:bottom-24 md:w-[min(480px,40vw)]">{hint3D}</p>}
+      {!sheetOpen && !curtainsUp && (!partyStep || preview3D) && (
         <div className="fixed inset-x-0 bottom-0 z-[55] flex h-16 items-center gap-2 border-t border-border bg-surface/95 px-3 backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:w-[min(480px,40vw)] md:rounded-2xl md:ring-1 md:ring-border">
-          <button ref={peekRef} onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 truncate text-left text-sm" aria-label={`Selected: ${seatLabel}. Open seat picker`}>
-            <span className="font-semibold">{seatLabel}</span> · {eur(total)} [PH]
-          </button>
-          {!split && selected.length === party && <>
-            <button type="button" data-shift="-1" onClick={() => shift(-1)} disabled={!shiftL} aria-label="Move group one seat left" className="grid size-11 shrink-0 place-items-center rounded-full ring-1 ring-border disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ChevronLeft className="size-5" aria-hidden /></button>
-            <button type="button" data-shift="1" onClick={() => shift(1)} disabled={!shiftR} aria-label="Move group one seat right" className="grid size-11 shrink-0 place-items-center rounded-full ring-1 ring-border disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ChevronRight className="size-5" aria-hidden /></button>
+          {preview3D ? <>
+            <button ref={peekRef} data-previewing onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 text-left text-sm leading-tight" aria-label={`Previewing ${preview3D.id}. Open seat picker`}>
+              <span className="block truncate font-semibold">Previewing {preview3D.id}</span><span className="block truncate text-xs text-text-muted">{eur(price)} [PH]</span>
+            </button>
+            <button type="button" onClick={() => { setPreview3D(null); setSay('Preview cleared [PH]') }} aria-label={`Clear preview of ${preview3D.id}`} className="grid size-11 shrink-0 place-items-center rounded-full ring-1 ring-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><X className="size-5" aria-hidden /></button>
+            {party === 1
+              ? <Button className="min-h-11" disabled={holding} onClick={goContinue}>Continue</Button>
+              : <Button className="min-h-11" onClick={useThisSeat}>Use this seat [PH]</Button>}
+          </> : <>
+            <button ref={peekRef} onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 text-left text-sm leading-tight" aria-label={`Selected: ${seatLabel}. Open seat picker`}>
+              <span className="block truncate font-semibold">{peekTop}</span><span className="block truncate text-xs text-text-muted">{peekSub}</span>
+            </button>
+            <Button variant="ghost" className="min-h-11" onClick={changeSeats} aria-label="Change seats: clear your picks and choose again"><span className="sm:hidden">Change</span><span className="hidden sm:inline">Change seats</span></Button>
+            <Button className="min-h-11" disabled={selected.length !== party || holding} onClick={goContinue}>Continue</Button>
           </>}
-          <Button variant="ghost" className="min-h-11" onClick={changeSeats} aria-label="Change seats: clear your picks and choose again">Change seats</Button>
-          <Button className="min-h-11" disabled={selected.length !== party || holding} onClick={goContinue}>Continue</Button>
         </div>
       )}
     </div>
@@ -366,4 +435,12 @@ function ShortPanel({ k, party, onFind, onSplit }: { k: number; party: number; o
       </div>
     </div>
   )
+}
+
+function ShiftButtons({ onShift, canL, canR }: { onShift: (d: -1 | 1) => void; canL: boolean; canR: boolean }) {
+  const c = 'grid size-11 shrink-0 place-items-center rounded-full ring-1 ring-border disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+  return <>
+    <button type="button" data-shift="-1" onClick={() => onShift(-1)} disabled={!canL} aria-label="Move group one seat left" className={c}><ChevronLeft className="size-5" aria-hidden /></button>
+    <button type="button" data-shift="1" onClick={() => onShift(1)} disabled={!canR} aria-label="Move group one seat right" className={c}><ChevronRight className="size-5" aria-hidden /></button>
+  </>
 }

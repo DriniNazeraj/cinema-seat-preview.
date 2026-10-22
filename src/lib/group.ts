@@ -45,13 +45,4 @@ export function shiftGroup(ids: string[], dir: -1 | 1, target: string, byId: Map
 export function rowsWithRun(hall: Hall, n: number, taken: Set<string>): string[] {
   return hall.rows.filter((r) => r.seats.some((s) => runAround(hall, s, taken).length >= n)).map((r) => r.label)
 }
-/** "C9 to C12" / "C9" */
-export function rangeLabel(ids: string[], byId: Map<string, Seat>): string {
-  const s = ids.map((id) => byId.get(id)!).filter(Boolean)
-  if (!s.length) return ''
-  const sorted = [...s].sort((a, b) => (a.row === b.row ? a.x - b.x : a.row.localeCompare(b.row)))
-  const oneRow = new Set(sorted.map((x) => x.row)).size === 1
-  const contiguous = oneRow && sorted[sorted.length - 1].x - sorted[0].x === sorted.length - 1
-  if (sorted.length === 1) return sorted[0].id
-  return contiguous ? `${sorted[0].id} to ${sorted[sorted.length - 1].id}` : sorted.map((x) => x.id).join(', ')
-}
+export { rangeLabel } from './group-label'

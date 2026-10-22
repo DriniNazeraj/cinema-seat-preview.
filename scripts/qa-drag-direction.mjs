@@ -1,4 +1,5 @@
 // fix11 / DESIGN §15.x: grab-the-scene (Street View). drag right -> hall follows finger -> camera looks LEFT (yaw > 0, look dir.x decreases);
+// fix12 §15.z: a 3D tap no longer enters a seat view (camera never moves by itself), so only the overview is dragged.
 // drag down -> camera looks UP (pitch > 0). Same on mouse + touch, overview + seat view. Phone 2D zoomed pan follows finger (native scroll).
 import { chromium } from 'playwright'
 const BASE = 'http://localhost:4175/movie/starlight-run/seats?party=1'
@@ -29,15 +30,13 @@ async function run(name, ctxOpts, drag, seatView) {
   const base = await st(p)
   const r = await drag(p, x, y, 120, 0); await p.waitForTimeout(2500); const d = await drag(p, x, y, 0, 80); await p.waitForTimeout(1500)
   const after = await st(p)
-  const out = { view: await p.getAttribute('[data-view]', 'data-view'), rightYaw: +r.yaw.toFixed(3), rightLookDx: +(r.dx - base.dx).toFixed(3), downPitch: +d.pitch.toFixed(3), springBackYaw: +after.yaw.toFixed(3) }
-  out.pass = out.rightYaw > 0 && out.rightLookDx < 0 && out.downPitch > 0 && Math.abs(out.springBackYaw) < 0.05 && (!seatView || out.view !== 'overview')
+  const out = { view: await p.getAttribute('[data-view]', 'data-view'), rightYaw: +r.yaw.toFixed(3), rightLookDx: +(r.dx - base.dx).toFixed(3), downPitch: +d.pitch.toFixed(3), springBackYaw: +after.yaw.toFixed(3), afterPitch: +after.pitch.toFixed(3) }
+  out.pass = out.rightYaw > 0 && out.rightLookDx < 0 && out.downPitch > 0 && Math.abs(out.springBackYaw - out.rightYaw) < 0.02 /* fix12: no auto move after drag */ && (!seatView || out.view !== 'overview')
   res[name] = out; ok &&= out.pass; await c.close()
 }
 const desk = { viewport: { width: 1440, height: 900 } }, phone = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 }
 await run('mouse-overview', desk, mouseDrag, false)
-await run('mouse-seat-view', desk, mouseDrag, true)
 await run('touch-overview', phone, touchDrag, false)
-await run('touch-seat-view', phone, touchDrag, true)
 { // phone 2D fit mode: tap zooms; then swipe finger LEFT must move content left (scrollLeft grows)
   const c = await b.newContext(phone), p = await c.newPage(); await p.goto(BASE + '&simple=1'); await p.waitForSelector('[data-seat]')
   await p.locator('[data-seat]').nth(2).tap(); await p.waitForTimeout(800)

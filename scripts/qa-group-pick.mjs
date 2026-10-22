@@ -43,7 +43,7 @@ check('card-range-and-count', /· 4 seats/.test(await card(p)))
 // 2) tap inside the group = no change
 const before = s; await tap(p, s[0]); s = await sel(p); check('tap-within-group-noop', JSON.stringify(s) === JSON.stringify(before))
 // 3) shift with ] and ‹ ›
-await openSheet(p); const rightBtn = p.locator('[data-shift="1"]'); await closeSheet(p); await p.waitForTimeout(300)
+await openSheet(p); const rightBtn = p.locator('[data-shift="1"]') // fix12: ‹ › live in the 2D sheet footer (never over 3D)
 const canR = await rightBtn.isEnabled(), canL = await p.locator('[data-shift="-1"]').isEnabled()
 if (canR) { await rightBtn.click(); const s2 = await sel(p); check('shift-right-by-one', s2.length === 4 && !s2.includes(before.sort((a, b) => xOf(+a.slice(1)) - xOf(+b.slice(1)))[0]), { s2 }) }
 else check('shift-right-disabled-at-edge', true)

@@ -17,6 +17,8 @@ export type HallSceneProps = {
   selected: string[]
   focusSeat: Seat | null
   hovered: Seat | null
+  /** fix12 §15.z: the 3D preview seat (outline accent 60%, not selected) */
+  preview?: Seat | null
   onPick: (seat: Seat) => void
   onHover: (seat: Seat | null) => void
   onContextLost: () => void
@@ -78,12 +80,12 @@ function edgeGeometry(grow: number, thin = false) {
 /** fix7: instanced seats, cushion + tilted back merged into one geometry.
  *  fix8 §15: free/selected/access seats = velvet (physical: roughness 0.8, sheen at grazing angles = top edges, 256px fabric normal);
  *  taken seats = a second instanced mesh, muted #3A2A2E, no sheen, no normal. Selected = gold edge + soft glow, 1.5s pulse. */
-function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, still, phone }: Pick<HallSceneProps, 'hall' | 'taken' | 'selected' | 'hovered' | 'onPick' | 'onHover' | 'phone'> & { looks: HallLooks; low: boolean; still: boolean }) {
+function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks, low, still, phone }: Pick<HallSceneProps, 'hall' | 'taken' | 'selected' | 'hovered' | 'preview' | 'onPick' | 'onHover' | 'phone'> & { looks: HallLooks; low: boolean; still: boolean }) {
   const items = useMemo(() => layout(hall), [hall])
   const open = useMemo(() => items.filter((i) => !taken.has(i.seat.id)), [items, taken])
   const shut = useMemo(() => items.filter((i) => taken.has(i.seat.id)), [items, taken])
   const mesh = useRef<THREE.InstancedMesh>(null), takenMesh = useRef<THREE.InstancedMesh>(null)
-  const edge = useRef<THREE.InstancedMesh>(null), glow = useRef<THREE.InstancedMesh>(null), hoverEdge = useRef<THREE.InstancedMesh>(null)
+  const edge = useRef<THREE.InstancedMesh>(null), glow = useRef<THREE.InstancedMesh>(null), hoverEdge = useRef<THREE.InstancedMesh>(null), previewEdge = useRef<THREE.InstancedMesh>(null)
   const edgeMat = useRef<THREE.MeshBasicMaterial>(null), glowMat = useRef<THREE.MeshBasicMaterial>(null)
   const velvet = useRef<THREE.MeshPhysicalMaterial>(null)
   const geo = useMemo(() => {
@@ -116,7 +118,16 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, st
     const h = hovered && !selected.includes(hovered.id) && !taken.has(hovered.id) ? items.find((i) => i.seat.id === hovered.id) : undefined
     if (h) { tmp.position.set(h.pos.x, h.pos.y, h.pos.z); tmp.updateMatrix(); hoverEdge.current!.setMatrixAt(0, tmp.matrix) }
     hoverEdge.current!.count = h ? 1 : 0; hoverEdge.current!.instanceMatrix.needsUpdate = true
-  }, [items, open, shut, taken, selected, hovered, tmp])
+    const pv = preview && !taken.has(preview.id) ? items.find((i) => i.seat.id === preview.id) : undefined
+    if (pv) { tmp.position.set(pv.pos.x, pv.pos.y, pv.pos.z); tmp.updateMatrix(); previewEdge.current!.setMatrixAt(0, tmp.matrix) }
+    previewEdge.current!.count = pv ? 1 : 0; previewEdge.current!.instanceMatrix.needsUpdate = true
+  }, [items, open, shut, taken, selected, hovered, preview, tmp])
+  // QA hook: screen position (CSS px) of a seat, so tests can tap real seats through the raycaster
+  const { camera: cam, size } = useThree()
+  useEffect(() => {
+    const w = window as Window & { __lumenSeatXY?: (id: string) => { x: number; y: number } | null }
+    w.__lumenSeatXY = (id) => { const it = items.find((i) => i.seat.id === id); if (!it) return null; const v = new THREE.Vector3(it.pos.x, it.pos.y + 0.45, it.pos.z).project(cam); return { x: (v.x + 1) / 2 * size.width, y: (1 - v.y) / 2 * size.height } }
+  }, [items, cam, size])
 
   // §14 in-place quality drop also drops sheen + normal map (one recompile, at the drop only)
   useEffect(() => { const v = velvet.current; if (!v || !low) return; v.sheen = 0; v.normalMap = null; v.needsUpdate = true }, [low])
@@ -132,7 +143,7 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, st
     e.stopPropagation()
     const item = e.instanceId != null ? list[e.instanceId] : undefined
     if (!item) return
-    if (kind === 'click') onPick(item.seat)
+    if (kind === 'click') { if ((e as ThreeEvent<MouseEvent>).delta > 8) return; onPick(item.seat) } // fix12: a drag that ends on a seat is not a tap
     else if (hovered?.id !== item.seat.id) onHover(item.seat)
   }
   const ev = (list: typeof items) => ({
@@ -156,6 +167,10 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, st
       {/* desktop hover: faint gold rim at 40% */}
       <instancedMesh ref={hoverEdge} args={[edgeGeo, undefined, 1]} raycast={noRay}>
         <meshBasicMaterial color="#F2B544" transparent opacity={0.4} toneMapped={false} />
+      </instancedMesh>
+      {/* fix12 §15.z: 3D preview outline, accent at 60%, no fill */}
+      <instancedMesh ref={previewEdge} args={[edgeGeo, undefined, 1]} raycast={noRay}>
+        <meshBasicMaterial color="#F2B544" transparent opacity={0.6} toneMapped={false} />
       </instancedMesh>
     </>
   )
@@ -218,21 +233,30 @@ function Room({ hall, looks }: { hall: Hall; looks: HallLooks }) {
 }
 
 function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallSceneProps, 'hall' | 'focusSeat' | 'resetKey' | 'instant' | 'phone'>) {
-  const { camera, gl } = useThree()
+  const { camera, gl, invalidate } = useThree()
   const items = useMemo(() => layout(hall), [hall])
   const from = useRef({ pos: new THREE.Vector3(), look: new THREE.Vector3() })
   const to = useRef(overview(hall))
   const look = useRef(overview(hall).look.clone())
   const t = useRef(1)
   const drag = useRef({ active: false, x: 0, y: 0, yaw: 0, pitch: 0 })
+  const fromDrag = useRef({ yaw: 0, pitch: 0 })
+  const t0 = useRef(0)
 
   useEffect(() => { camera.position.copy(to.current.pos); camera.lookAt(to.current.look) }, [camera])
 
   const go = (target: { pos: THREE.Vector3; look: THREE.Vector3 }) => {
     from.current = { pos: camera.position.clone(), look: look.current.clone() }
     to.current = target
+    fromDrag.current = { yaw: drag.current.yaw, pitch: drag.current.pitch } // fix12: the drag offset glides back to 0 with the move
     t.current = instant ? 1 : 0
-    if (instant) { camera.position.copy(target.pos); look.current.copy(target.look) }
+    t0.current = -1 // fix12: time-based glide; the 400ms clock starts on the first frame after the click (wall clock, not summed dt)
+    drag.current.active = false
+    if (instant) {
+      camera.position.copy(target.pos); look.current.copy(target.look); drag.current.yaw = 0; drag.current.pitch = 0
+      const dir = target.look.clone().sub(target.pos); camera.lookAt(target.look); invalidate()
+      ;(window as Window & { __lumenDrag?: unknown }).__lumenDrag = { yaw: 0, pitch: 0, dx: dir.x, dy: dir.y } // QA hook, same frame
+    }
   }
   useEffect(() => {
     if (!focusSeat) return
@@ -246,7 +270,7 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallScene
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey])
 
-  // drag to look around (clamped), springs back on release.
+  // drag to look around (clamped); fix12: stays where released (no spring-back).
   // fix11 (DESIGN §15, Street View grab): drag right -> hall follows the finger -> camera looks LEFT (yaw +); drag down -> looks UP (pitch +).
   // yaw used to be subtracted (looked toward the drag) while pitch was grab-style; same handler serves mouse + touch, overview + seat view.
   useEffect(() => {
@@ -269,13 +293,16 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallScene
 
   useFrame((_, dt) => {
     if (t.current < 1) {
-      t.current = Math.min(1, t.current + dt / 0.9)
-      const k = t.current < 0.5 ? 4 * t.current ** 3 : 1 - (-2 * t.current + 2) ** 3 / 2 // ease-in-out
+      // fix12: 400ms ease-out glide (enter seat view, Change seats, Reset view); instant under reduced motion (see go())
+      if (t0.current < 0) t0.current = performance.now()
+      t.current = Math.min(1, (performance.now() - t0.current) / 400)
+      const k = 1 - (1 - t.current) ** 3 // ease-out cubic
       camera.position.lerpVectors(from.current.pos, to.current.pos, k)
       look.current.lerpVectors(from.current.look, to.current.look, k)
+      if (!drag.current.active) { drag.current.yaw = fromDrag.current.yaw * (1 - k); drag.current.pitch = fromDrag.current.pitch * (1 - k) }
     }
     const d = drag.current
-    if (!d.active) { d.yaw *= 0.9; d.pitch *= 0.9 }
+    // fix12: no spring-back. After a drag the view stays where the user left it (no automatic camera move after drag/zoom).
     const dir = look.current.clone().sub(camera.position)
     dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), d.yaw)
     dir.y += d.pitch * dir.length()
