@@ -1,0 +1,26 @@
+// Build-time prerender: writes dist/<route>/index.html with real content + per-page
+// title/meta/OG/JSON-LD. The seat picker is intentionally NOT prerendered (SPA fallback).
+import fs from 'node:fs'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const dist = path.resolve('dist')
+const mod = await import(pathToFileURL(path.resolve('dist-ssr/entry-server.js')).href)
+const template = fs.readFileSync(path.join(dist, 'index.html'), 'utf8')
+const routes = ['/', '/now-showing', '/booking', '/booking/confirmed', ...mod.__static.movies().map((m: { id: string }) => `/movie/${m.id}`)]
+
+// keep a pristine SPA shell for non-prerendered routes (seat picker)
+fs.writeFileSync(path.join(dist, '200.html'), template.replace('<!--head-->', '<meta name="robots" content="noindex" />'))
+
+for (const r of routes) {
+  const { html, head } = await mod.render(r)
+  const out = template.replace(/<title>.*?<\/title>/, '').replace('<!--head-->', head).replace('<!--app-->', html)
+  const file = path.join(dist, r === '/' ? 'index.html' : `${r.slice(1)}/index.html`)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, out)
+  console.log('prerendered', r)
+}
+const urls = routes.filter((r) => !r.startsWith('/booking')).map((r) => `  <url><loc>https://lumen-cinema.example${r}</loc></url>`).join('\n')
+fs.writeFileSync(path.join(dist, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`)
+fs.appendFileSync(path.join(dist, 'robots.txt'), 'Sitemap: https://lumen-cinema.example/sitemap.xml\n')
+fs.rmSync('dist-ssr', { recursive: true, force: true })
