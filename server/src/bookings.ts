@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type pg from 'pg'
-import { CHILD_ONLY_MESSAGE, CURRENCY, type TicketType } from './contract.ts'
+import {
+  ACCESS_SEAT_MISMATCH_MESSAGE,
+  CHILD_ONLY_MESSAGE,
+  countsAsAdult,
+  CURRENCY,
+  type TicketType,
+} from './contract.ts'
 import { ApiException } from './errors.ts'
 import { int, iso, pgConstraint, pgErrorCode, sameSet } from './util.ts'
 
@@ -153,7 +159,7 @@ export async function readBooking(client: pg.PoolClient, ref: string): Promise<B
 }
 
 export async function createBooking(client: pg.PoolClient, input: BookingBody): Promise<Outcome> {
-  if (!input.tickets.some((ticket) => ticket.ticketType === 'adult')) {
+  if (!countsAsAdult(input.tickets)) {
     throw new ApiException('CHILD_ONLY_BOOKING', { fields: { tickets: CHILD_ONLY_MESSAGE } })
   }
 
@@ -228,19 +234,19 @@ export async function createBooking(client: pg.PoolClient, input: BookingBody): 
     return { ok: true, status: 200, data: current }
   }
 
+  await assertAccessSeats(client, hold.show_id, hold.seats, input.tickets)
+
   const prices = await client.query<{ ticket_type: TicketType; price_cents: number }>(
     `SELECT ticket_type, price_cents FROM ticket_prices WHERE show_id = $1`,
     [hold.show_id],
   )
   const priceOf = new Map(prices.rows.map((row) => [row.ticket_type, int(row.price_cents, 'price')]))
-  const adult = priceOf.get('adult')
-  const child = priceOf.get('child')
-  if (adult === undefined || child === undefined) throw new Error(`Show ${hold.show_id} is missing ticket prices`)
 
   const lines = hold.seats.map((seatId) => {
     const ticket = input.tickets.find((item) => item.seatId === seatId)
     if (!ticket) throw new ApiException('HOLD_SEAT_MISMATCH')
-    const priceCents = ticket.ticketType === 'adult' ? adult : child
+    const priceCents = priceOf.get(ticket.ticketType)
+    if (priceCents === undefined) throw new Error(`Show ${hold.show_id} is missing a ${ticket.ticketType} price`)
     return { seatId, ticketType: ticket.ticketType, priceCents }
   })
   const total = lines.reduce((sum, line) => sum + line.priceCents, 0)
@@ -284,6 +290,28 @@ export async function createBooking(client: pg.PoolClient, input: BookingBody): 
   const record = await loadBookingById(client, bookingId)
   if (!record) throw new Error('booking insert did not reload')
   return { ok: true, status: 201, data: record }
+}
+
+async function assertAccessSeats(
+  client: pg.PoolClient,
+  showId: string,
+  seats: readonly string[],
+  tickets: readonly TicketInput[],
+): Promise<void> {
+  const result = await client.query<{ id: string; kind: string }>(
+    `SELECT st.id, st.kind
+     FROM seats AS st
+     JOIN shows AS sh ON sh.hall_id = st.hall_id
+     WHERE sh.id = $1
+       AND st.id = ANY($2::text[])`,
+    [showId, seats],
+  )
+  if (result.rows.length !== seats.length) throw new Error(`Show ${showId} is missing a held seat`)
+  const access = result.rows.filter((row) => row.kind === 'access').length
+  const disabled = tickets.filter((ticket) => ticket.ticketType === 'disabled').length
+  if (access !== disabled) {
+    throw new ApiException('ACCESS_SEAT_MISMATCH', { fields: { tickets: ACCESS_SEAT_MISMATCH_MESSAGE } })
+  }
 }
 
 async function loadBookingById(client: pg.PoolClient, id: string): Promise<BookingJson | null> {

@@ -3,9 +3,12 @@
  * and does not redefine them.
  */
 export {
+  ACCESS_SEAT_MISMATCH_MESSAGE,
   ApiFailureSchema,
   BookingResponseSchema,
   CHILD_ONLY_MESSAGE,
+  COUNTS_AS_ADULT,
+  countsAsAdult,
   CURRENCY,
   CreateBookingBodySchema,
   CreateHoldBodySchema,
@@ -19,10 +22,12 @@ export {
   ListMoviesResponseSchema,
   ListShowsQuerySchema,
   ListShowsResponseSchema,
+  PLACEHOLDER_TICKET_PRICES,
   RATE_LIMITS,
   ReleaseHoldResponseSchema,
   SeatMapQuerySchema,
   seatTakenMessage,
   type ErrorCode,
+  type SeatKind,
   type TicketType,
 } from '../../src/lib/api-contract.ts'

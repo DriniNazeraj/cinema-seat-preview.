@@ -39,8 +39,9 @@ async function fixture(): Promise<void> {
   )
   await pool.query(
     `INSERT INTO ticket_prices (show_id, ticket_type, price_cents, currency) VALUES
-       ($1, 'adult', 900, 'EUR'),
-       ($1, 'child', 600, 'EUR')`,
+       ($1, 'adult', 1200, 'EUR'),
+       ($1, 'child', 800, 'EUR'),
+       ($1, 'disabled', 800, 'EUR')`,
     [showId],
   )
 }

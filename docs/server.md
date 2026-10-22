@@ -37,13 +37,13 @@ From `server/`:
 
 ```bash
 npm run migrate   # db/migrations/*.sql, once each, recorded in schema_migrations
-npm run seed      # placeholder movies, halls, seats, shows, adult/child prices in cents
+npm run seed      # placeholder movies, halls, seats, shows, adult/child/disabled prices in cents
 npm run dev       # tsx watch, http://localhost:3000
 ```
 
 `npm start` runs the same server without the file watcher.
 
-The seed is safe to re-run. Films and halls refresh in place. Shows are the next seven calendar days in Europe/Berlin at 13:30, 16:00, 18:45, and 21:15. Prices are integer cents: 2D 900/600, 3D 1200/800, IMAX 1500/1000. There is no senior ticket. The featured film's 21:15 show today is closed (`soldOut`). Halls are rows A–J, 16 seats in blocks of 4 / 8 / 4. Row J seats 1, 2, 15, and 16 are wheelchair spaces. Synopses are marked `[PH]`.
+The seed is safe to re-run. Films and halls refresh in place. Shows are the next seven calendar days in Europe/Berlin at 13:30, 16:00, 18:45, and 21:15. Prices are the placeholder cents in `PLACEHOLDER_TICKET_PRICES`: adult 1200, child 800, disabled 800, for every format. There is no senior ticket. The featured film's 21:15 show today is closed (`soldOut`). Halls are rows A–J, 16 seats in blocks of 4 / 8 / 4. On the last row, seats 1, 2, 15, and 16 are `access`, and seats 3 and 14 are `companion`. Other seats are `standard`. Synopses are marked `[PH]`.
 
 Show ids look like `starlight-run-2026-10-22-1330` (13:30 Europe/Berlin is `2026-10-22T11:30:00.000Z` while CEST is in effect).
 

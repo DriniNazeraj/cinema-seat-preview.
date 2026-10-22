@@ -1,6 +1,6 @@
 import type pg from 'pg'
 import { config } from './config.ts'
-import { CURRENCY, type TicketType } from './contract.ts'
+import { CURRENCY, type SeatKind, type TicketType } from './contract.ts'
 import { ApiException } from './errors.ts'
 import { int, iso } from './util.ts'
 
@@ -133,9 +133,11 @@ async function hydrateShows(client: pg.PoolClient, rows: ShowRow[]) {
 function showJson(row: ShowRow, prices: PriceRow[]) {
   const adult = prices.find((price) => price.ticket_type === 'adult')
   const child = prices.find((price) => price.ticket_type === 'child')
-  if (!adult || !child) throw new Error(`Show ${row.id} is missing adult and child prices`)
+  const disabled = prices.find((price) => price.ticket_type === 'disabled')
+  if (!adult || !child || !disabled) throw new Error(`Show ${row.id} is missing ticket prices`)
   const adultCents = int(adult.price_cents, 'adult price')
   const childCents = int(child.price_cents, 'child price')
+  const disabledCents = int(disabled.price_cents, 'disabled price')
   return {
     id: row.id,
     movieId: row.movie_id,
@@ -148,11 +150,12 @@ function showJson(row: ShowRow, prices: PriceRow[]) {
     ticketPrices: [
       { ticketType: 'adult' as const, priceCents: adultCents, currency: CURRENCY },
       { ticketType: 'child' as const, priceCents: childCents, currency: CURRENCY },
+      { ticketType: 'disabled' as const, priceCents: disabledCents, currency: CURRENCY },
     ],
   }
 }
 
-type SeatRow = { id: string; row: string; n: number; x: number; type: 'std' | 'access' }
+type SeatRow = { id: string; row: string; n: number; x: number; type: 'std' | 'access'; kind: SeatKind }
 type HallRow = { id: string; name: string; columns: number }
 type OccupancyRow = { seat_id: string; kind: 'hold' | 'booked' }
 
@@ -165,7 +168,7 @@ export async function getSeatMap(client: pg.PoolClient, showId: string, holdId: 
   const hallRow = hallResult.rows[0]
   if (!hallRow) throw new Error(`Hall ${show.hallId} is missing`)
   const seatResult = await client.query<SeatRow>(
-    `SELECT id, row, n, x, type
+    `SELECT id, row, n, x, type, kind
      FROM seats
      WHERE hall_id = $1
      ORDER BY row ASC, n ASC`,
@@ -194,8 +197,8 @@ export async function getSeatMap(client: pg.PoolClient, showId: string, holdId: 
   const statuses: { seatId: string; status: 'available' | 'held' | 'booked' }[] = []
   const taken: string[] = []
   for (const seat of seatResult.rows) {
-    const kind = occupied.get(seat.id)
-    const status = kind === 'booked' ? 'booked' : kind === 'hold' ? 'held' : 'available'
+    const occupancyKind = occupied.get(seat.id)
+    const status = occupancyKind === 'booked' ? 'booked' : occupancyKind === 'hold' ? 'held' : 'available'
     statuses.push({ seatId: seat.id, status })
     if (status === 'booked' || (status === 'held' && !own.has(seat.id))) taken.push(seat.id)
   }
@@ -214,6 +217,7 @@ export async function getSeatMap(client: pg.PoolClient, showId: string, holdId: 
           n: int(seat.n, 'n'),
           x: int(seat.x, 'x'),
           type: seat.type,
+          kind: seat.kind,
         })),
       })),
     },

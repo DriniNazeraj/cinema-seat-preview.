@@ -1,5 +1,6 @@
 -- Placeholder catalogue. Films, halls, and prices are not a real cinema.
--- Ticket prices are integer cents. Adult and child only; there is no senior ticket.
+-- Ticket prices are integer cents from PLACEHOLDER_TICKET_PRICES:
+-- adult 1200, child 800, disabled 800. There is no senior ticket.
 -- Shows are the next seven calendar days in Europe/Berlin (default CINEMA_TZ),
 -- at 13:30, 16:00, 18:45, and 21:15. The featured film's 21:15 today is closed.
 
@@ -97,8 +98,10 @@ ON CONFLICT (id) DO UPDATE SET
   columns = EXCLUDED.columns;
 
 -- Rows A–J, 16 seats in blocks of 4 / 8 / 4. x includes the aisle gaps (columns 18).
--- Row J seats 1, 2, 15, and 16 are the placeholder wheelchair spaces.
-INSERT INTO seats (hall_id, id, row, n, x, type)
+-- Last row (J): the two outermost seats at each end are access (J1, J2, J15, J16).
+-- The seat just inside each pair is companion (J3, J14). Everything else is standard.
+-- type stays the mock marker: access on those four seats, std elsewhere.
+INSERT INTO seats (hall_id, id, row, n, x, type, kind)
 SELECT
   h.id,
   chr(65 + r.i) || n.i::text,
@@ -112,6 +115,11 @@ SELECT
   CASE
     WHEN r.i = 9 AND n.i IN (1, 2, 15, 16) THEN 'access'
     ELSE 'std'
+  END,
+  CASE
+    WHEN r.i = 9 AND n.i IN (1, 2, 15, 16) THEN 'access'
+    WHEN r.i = 9 AND n.i IN (3, 14) THEN 'companion'
+    ELSE 'standard'
   END
 FROM halls h
 CROSS JOIN generate_series(0, 9) AS r(i)
@@ -120,7 +128,8 @@ ON CONFLICT (hall_id, id) DO UPDATE SET
   row = EXCLUDED.row,
   n = EXCLUDED.n,
   x = EXCLUDED.x,
-  type = EXCLUDED.type;
+  type = EXCLUDED.type,
+  kind = EXCLUDED.kind;
 
 WITH days AS (
   SELECT d::date AS day
@@ -166,18 +175,15 @@ SELECT
 FROM slots
 ON CONFLICT (id) DO NOTHING;
 
--- 2D 900/600, 3D 1200/800, IMAX 1500/1000. Integer cents, currency EUR.
+-- PLACEHOLDER_TICKET_PRICES: adult 1200, child 800, disabled 800. Every format.
 INSERT INTO ticket_prices (show_id, ticket_type, price_cents, currency)
 SELECT s.id, p.ticket_type, p.price_cents, 'EUR'
 FROM shows s
-JOIN (VALUES
-  ('2D', 'adult', 900),
-  ('2D', 'child', 600),
-  ('3D', 'adult', 1200),
-  ('3D', 'child', 800),
-  ('IMAX', 'adult', 1500),
-  ('IMAX', 'child', 1000)
-) AS p(format, ticket_type, price_cents) ON p.format = s.format
+CROSS JOIN (VALUES
+  ('adult', 1200),
+  ('child', 800),
+  ('disabled', 800)
+) AS p(ticket_type, price_cents)
 ON CONFLICT (show_id, ticket_type) DO UPDATE SET
   price_cents = EXCLUDED.price_cents,
   currency = EXCLUDED.currency;
