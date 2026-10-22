@@ -2,7 +2,7 @@ import { chromium } from 'playwright'
 const b = await chromium.launch({ args: ['--disable-3d-apis'] }); const p = await b.newPage(); const errs=[]
 p.on('pageerror', e => errs.push(e.message))
 await p.goto('http://localhost:4174/movie/neon-alley')
-await p.locator('main button[aria-label*="€"]:not([disabled])').first().click(); await p.waitForURL(/seats/)
+await p.locator('main section button:not([disabled]):has-text("€")').first().click(); await p.waitForURL(/seats/)
 await p.locator('[data-seat][aria-label*="free"]').nth(5).click()
 await p.locator('[data-seat][aria-label*="free"]').nth(5).press('ArrowRight')
 await p.keyboard.press('Enter')

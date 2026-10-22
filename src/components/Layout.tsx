@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
-import { Menu, X } from 'lucide-react'
+import { Menu } from 'lucide-react'
+import { Dialog, DialogClose, DialogTrigger, SheetContent } from './Dialog'
 import { Toaster } from 'sonner'
 import { ButtonLink, Container } from './ui'
 import { metaFor } from '@/lib/seo'
@@ -27,22 +28,18 @@ export function Layout() {
             <a href="/#about" className={link}>About [PH]</a>
             <ButtonLink to="/now-showing" className="ml-2">Book tickets</ButtonLink>
           </nav>
-          <button className="grid size-11 place-items-center rounded-full ring-1 ring-border md:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(true)}>
-            <Menu className="size-5" />
-          </button>
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger className="grid size-11 place-items-center rounded-full ring-1 ring-border md:hidden" aria-label="Open menu">
+              <Menu className="size-5" />
+            </DialogTrigger>
+            <SheetContent title="Menu">
+              <DialogClose asChild><Link to="/now-showing" className="rounded-xl px-3 py-3 hover:bg-surface-2">Now Showing</Link></DialogClose>
+              <DialogClose asChild><a href="/#about" className="rounded-xl px-3 py-3 hover:bg-surface-2">About [PH]</a></DialogClose>
+              <DialogClose asChild><ButtonLink to="/now-showing" className="mt-2">Book tickets</ButtonLink></DialogClose>
+            </SheetContent>
+          </Dialog>
         </Container>
       </header>
-      {open && (
-        <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Menu">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-0 flex h-full w-72 flex-col gap-2 bg-surface p-4 ring-1 ring-border">
-            <button className="ml-auto grid size-11 place-items-center rounded-full ring-1 ring-border" aria-label="Close menu" onClick={() => setOpen(false)}><X className="size-5" /></button>
-            <Link to="/now-showing" className="rounded-xl px-3 py-3 hover:bg-surface-2">Now Showing</Link>
-            <a href="/#about" className="rounded-xl px-3 py-3 hover:bg-surface-2">About [PH]</a>
-            <ButtonLink to="/now-showing" className="mt-2">Book tickets</ButtonLink>
-          </div>
-        </div>
-      )}
       <main id="main" className="flex-1"><Outlet /></main>
       <footer id="about" className="border-t border-border py-12 text-sm text-text-muted">
         <Container className="grid gap-6 md:grid-cols-3">

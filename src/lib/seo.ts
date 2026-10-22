@@ -50,7 +50,13 @@ export function headTags(meta: Meta, noindex = false) {
     `<meta property="og:description" content="${esc(meta.description)}" />`,
     `<meta property="og:url" content="${url}" />`,
     `<meta property="og:image" content="${ORIGIN}/og.png" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta property="og:image:alt" content="Lumen Cinema [PH] placeholder share image" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
+    `<meta name="twitter:title" content="${esc(meta.title)}" />`,
+    `<meta name="twitter:description" content="${esc(meta.description)}" />`,
+    `<meta name="twitter:image" content="${ORIGIN}/og.png" />`,
     noindex ? `<meta name="robots" content="noindex" />` : '',
     ...(meta.jsonLd ?? []).map((j) => `<script type="application/ld+json">${JSON.stringify(j).replace(/</g, '\\u003c')}</script>`),
   ].filter(Boolean).join('\n    ')

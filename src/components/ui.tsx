@@ -1,5 +1,5 @@
 import { Link, type LinkProps } from 'react-router-dom'
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { cn } from '@/lib/format'
 
 const base = 'inline-flex items-center justify-center gap-2 rounded-full font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:opacity-50 disabled:cursor-not-allowed min-h-11 px-5 text-sm'
@@ -9,12 +9,12 @@ const variants = {
   subtle: 'bg-surface-2 text-text hover:bg-border',
 }
 type V = keyof typeof variants
-export function Button({ variant = 'primary', className, ...p }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: V }) {
-  return <button className={cn(base, variants[variant], className)} {...p} />
-}
-export function ButtonLink({ variant = 'primary', className, ...p }: LinkProps & { variant?: V }) {
-  return <Link className={cn(base, variants[variant], className)} {...p} />
-}
+export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & { variant?: V }>(function Button({ variant = 'primary', className, ...p }, ref) {
+  return <button ref={ref} className={cn(base, variants[variant], className)} {...p} />
+})
+export const ButtonLink = forwardRef<HTMLAnchorElement, LinkProps & { variant?: V }>(function ButtonLink({ variant = 'primary', className, ...p }, ref) {
+  return <Link ref={ref} className={cn(base, variants[variant], className)} {...p} />
+})
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return <div className={cn('rounded-xl bg-surface ring-1 ring-border', className)}>{children}</div>
 }

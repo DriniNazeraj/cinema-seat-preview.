@@ -11,12 +11,12 @@ export function ShowtimePill({ show, withPrice = false }: { show: Show; withPric
     <button
       disabled={show.soldOut}
       onClick={() => nav(seatsUrl(show))}
-      aria-label={`${time(show.start)} ${show.format}${show.soldOut ? ', sold out' : `, ${eur(show.price)}`}`}
       className={cn('inline-flex min-h-11 items-center gap-2 rounded-full px-4 text-sm tabular-nums ring-1 ring-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
         show.soldOut ? 'cursor-not-allowed text-text-muted line-through opacity-60' : 'bg-surface-2 hover:bg-accent hover:text-accent-fg')}
     >
       <span className="font-medium">{time(show.start)}</span>
       {withPrice && <span className="text-xs opacity-80">{show.soldOut ? 'Sold out' : eur(show.price)}</span>}
+      <span className="sr-only">{` ${show.format}${show.soldOut && !withPrice ? ', sold out' : ''}`}</span>
     </button>
   )
 }

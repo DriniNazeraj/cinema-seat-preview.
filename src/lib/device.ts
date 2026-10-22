@@ -16,7 +16,6 @@ export function decideThree(): ThreeDecision {
   if (!hasWebGL()) return { mode: 'off', reason: 'Your browser has 3D turned off' }
   const nav = navigator as Navigator & { connection?: { saveData?: boolean }; deviceMemory?: number }
   if (nav.connection?.saveData) return { mode: 'off', reason: 'Data saver is on' }
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return { mode: 'off', reason: 'Reduced motion is on' }
   if ((nav.hardwareConcurrency ?? 8) <= 2) return { mode: 'off', reason: 'Simple view for this device' }
   const mobile = window.matchMedia('(max-width: 1023px)').matches
   if (mobile && (nav.deviceMemory ?? 8) <= 4) return { mode: 'on-demand' }

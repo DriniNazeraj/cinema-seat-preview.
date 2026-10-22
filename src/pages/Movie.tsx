@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Play, X } from 'lucide-react'
+import { Play } from 'lucide-react'
+import { Dialog, DialogContent, DialogTrigger } from '@/components/Dialog'
 import { getMovie, listShows, type Show } from '@/lib/api'
 import { useData } from '@/lib/useData'
 import { dayKey, dayLabel } from '@/lib/format'
@@ -40,7 +41,15 @@ export default function MoviePage() {
           <h1 className="font-display text-5xl uppercase tracking-wide md:text-7xl">{m.title} <PH /></h1>
           <p className="mt-1 text-sm text-text-muted">{m.rating} · {m.runtime} min · {m.genres.join(', ')}</p>
           <p className="mt-4 max-w-2xl text-text/90">{m.synopsis}</p>
-          <Button variant="ghost" className="mt-5" onClick={() => setTrailer(true)}><Play className="size-4" /> Watch trailer</Button>
+          <Dialog open={trailer} onOpenChange={setTrailer}>
+            <DialogTrigger asChild><Button variant="ghost" className="mt-5"><Play className="size-4" /> Watch trailer</Button></DialogTrigger>
+            <DialogContent title={`${m.title} trailer`} closeLabel="Close trailer">
+              <div className="relative aspect-video w-full">
+                <Poster movie={m} wide />
+                <p className="absolute inset-0 grid place-items-center font-display text-4xl">TRAILER [PH]</p>
+              </div>
+            </DialogContent>
+          </Dialog>
 
           <h2 className="mt-10 font-display text-3xl uppercase tracking-wide">Showtimes</h2>
           <div className="mt-4 space-y-6">
@@ -58,15 +67,6 @@ export default function MoviePage() {
           </div>
         </div>
       </Container>
-      {trailer && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Trailer" onClick={() => setTrailer(false)}>
-          <div className="relative aspect-video w-full max-w-3xl overflow-hidden rounded-xl bg-surface ring-1 ring-border" onClick={(e) => e.stopPropagation()}>
-            <Poster movie={m} wide />
-            <p className="absolute inset-0 grid place-items-center font-display text-4xl">TRAILER [PH]</p>
-            <button autoFocus className="absolute right-3 top-3 grid size-11 place-items-center rounded-full bg-bg/80" aria-label="Close trailer" onClick={() => setTrailer(false)}><X className="size-5" /></button>
-          </div>
-        </div>
-      )}
     </>
   )
 }

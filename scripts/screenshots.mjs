@@ -4,7 +4,7 @@ const OUT = '/workspace/cinema/final'
 const errors = []
 async function seatsUrl(page) {
   await page.goto(`${BASE}/movie/starlight-run`)
-  await page.locator('main button[aria-label*="€"]:not([disabled])').first().click()
+  await page.locator('main section button:not([disabled]):has-text("€")').first().click()
   await page.waitForURL(/seats/)
   return page.url()
 }

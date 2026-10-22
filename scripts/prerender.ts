@@ -10,11 +10,11 @@ const template = fs.readFileSync(path.join(dist, 'index.html'), 'utf8')
 const routes = ['/', '/now-showing', '/booking', '/booking/confirmed', ...mod.__static.movies().map((m: { id: string }) => `/movie/${m.id}`)]
 
 // keep a pristine SPA shell for non-prerendered routes (seat picker)
-fs.writeFileSync(path.join(dist, '200.html'), template.replace('<!--head-->', '<meta name="robots" content="noindex" />'))
+fs.writeFileSync(path.join(dist, '200.html'), template.replace('<!--head-->', '<meta name="robots" content="noindex" />\n    <meta name="description" content="Choose your seats with a 3D view from your seat. Lumen Cinema [PH] demo." />'))
 
 for (const r of routes) {
-  const { html, head } = await mod.render(r)
-  const out = template.replace(/<title>.*?<\/title>/, '').replace('<!--head-->', head).replace('<!--app-->', html)
+  const { html, head, data } = await mod.render(r)
+  const out = template.replace(/<title>.*?<\/title>/, '').replace('<!--head-->', head).replace('<!--app-->', html).replace('</body>', `<script>window.__DATA__=${JSON.stringify(data).replace(/</g, '\\u003c')}</script>\n  </body>`)
   const file = path.join(dist, r === '/' ? 'index.html' : `${r.slice(1)}/index.html`)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, out)

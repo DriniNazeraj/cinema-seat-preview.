@@ -17,7 +17,7 @@ export default function App() {
         <Route index element={<Home />} />
         <Route path="now-showing" element={<NowShowing />} />
         <Route path="movie/:id" element={<MoviePage />} />
-        <Route path="movie/:id/seats" element={<Suspense fallback={<Container className="py-10"><Skeleton className="h-96" /></Container>}><SeatsPage /></Suspense>} />
+        <Route path="movie/:id/seats" element={<Suspense fallback={<Container className="min-h-[115svh] py-10"><Skeleton className="h-96" /></Container>}><SeatsPage /></Suspense>} />
         <Route path="booking" element={<BookingPage />} />
         <Route path="booking/confirmed" element={<Confirmed />} />
         <Route path="*" element={<Container className="py-24 text-center"><h1 className="font-display text-6xl">Not found</h1></Container>} />

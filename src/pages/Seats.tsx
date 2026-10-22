@@ -125,7 +125,7 @@ export default function SeatsPage() {
   )
 
   return (
-    <div className="pb-28 lg:pb-12">
+    <div className="min-h-[115svh] pb-28 lg:pb-12">
       <div className="sticky top-16 z-30 border-b border-border bg-bg/90 backdrop-blur">
         <Container className="flex h-12 items-center overflow-x-auto"><StepIndicator step={1} /></Container>
       </div>
@@ -141,7 +141,7 @@ export default function SeatsPage() {
             <button className="mt-2 text-xs text-text-muted underline lg:hidden" onClick={() => setCollapsed((c) => !c)}>{collapsed ? 'Show preview view' : 'Hide preview to make room'}</button>
           </div>
           <Card className="p-4 lg:w-[440px]">
-            {!map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-6" />)}</div> : (
+            {!map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-10 sm:h-6" />)}</div> : (
               <>
                 <SeatMap2D hall={map.data.hall} taken={taken} selected={selected} price={price} onPick={pick} onHover={setHovered} shakeId={shake} compact={false} />
                 <div className="mt-4"><SeatLegend /></div>
