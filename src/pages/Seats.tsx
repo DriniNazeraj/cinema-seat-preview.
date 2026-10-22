@@ -185,7 +185,7 @@ export default function SeatsPage() {
                                   <HallScene3D hall={map.data.hall} taken={taken} selected={selected} focusSeat={focusSeat} hovered={hovered}
                     onPick={pick} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
                     onContextLost={() => setLostNote('3D view paused, showing simple view')}
-                  paused={curtain === 'opening'} fpsGuard={fpsGuard} fpsForceSlow={fpsSlow} onStillSlow={slowToast}
+                  paused={curtain === 'opening'} applyLooks={curtain === 'gone'} fpsGuard={fpsGuard} fpsForceSlow={fpsSlow} onStillSlow={slowToast}
                   onReady={() => { performance.mark('lumen:hall-ready'); setThreeReady(true) }} />
               </Suspense>
             </GLBoundary>

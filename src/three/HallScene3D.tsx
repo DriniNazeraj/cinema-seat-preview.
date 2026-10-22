@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { PerformanceMonitor } from '@react-three/drei'
 import * as THREE from 'three'
+import { makeHallLooks, rowGlow, type HallLooks } from './hallLooks'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { Hall, Seat } from '@/lib/api'
 
@@ -53,14 +54,34 @@ function overview(hall: Hall) {
   return { pos: new THREE.Vector3(0, last * ROW_RISE + 3.2, FIRST_ROW_Z + last * ROW_DEPTH + 3.2), look: new THREE.Vector3(0, 1.6, 2) }
 }
 
-function eye(p: THREE.Vector3) {
+function eye(p: THREE.Vector3, phone = false) {
+  // fix8 (BUILD-NOTES 3): on a portrait phone the seat-eye view was all screen and cropped the selected seats a few rows ahead.
+  // Phone: eye a little higher/behind the seat and aimed lower, so rows ahead + the screen both fit (with the wider phone fov).
+  if (phone) return { pos: new THREE.Vector3(p.x, p.y + 1.85, p.z + 0.35), look: new THREE.Vector3(p.x * 0.5, SCREEN.y - 1.9, SCREEN.z + 2) }
   return { pos: new THREE.Vector3(p.x, p.y + 1.15, p.z + 0.05), look: SCREEN_CENTER.clone() }
 }
 
-/** fix7: one InstancedMesh for all seats (cushion + tilted back merged into one geometry): one draw call, one program */
-function Seats({ hall, taken, selected, hovered, onPick, onHover }: Pick<HallSceneProps, 'hall' | 'taken' | 'selected' | 'hovered' | 'onPick' | 'onHover'>) {
+const TAKEN = new THREE.Color('#3A2A2E')
+/** §15 gold edge: back top rail + back sides + both arms, seat-local (seat origin = row floor). Body stays velvet. */
+function edgeGeometry(grow: number) {
+  const parts = [
+    [0.54, 0.05, 0.05, 0, 1.03, 0.22],
+    [0.05, 0.62, 0.05, -0.27, 0.72, 0.29], [0.05, 0.62, 0.05, 0.27, 0.72, 0.29],
+    [0.05, 0.05, 0.5, -0.28, 0.5, 0.02], [0.05, 0.05, 0.5, 0.28, 0.5, 0.02],
+  ].map(([w, h, d, x, y, z]) => new THREE.BoxGeometry(w * (w < 0.1 ? grow : 1), h * (h < 0.1 ? grow : 1), d * (d < 0.1 ? grow : 1)).translate(x, y, z))
+  return mergeGeometries(parts)!
+}
+/** fix7: instanced seats, cushion + tilted back merged into one geometry.
+ *  fix8 §15: free/selected/access seats = velvet (physical: roughness 0.8, sheen at grazing angles = top edges, 256px fabric normal);
+ *  taken seats = a second instanced mesh, muted #3A2A2E, no sheen, no normal. Selected = gold edge + soft glow, 1.5s pulse. */
+function Seats({ hall, taken, selected, hovered, onPick, onHover, looks, low, still }: Pick<HallSceneProps, 'hall' | 'taken' | 'selected' | 'hovered' | 'onPick' | 'onHover'> & { looks: HallLooks; low: boolean; still: boolean }) {
   const items = useMemo(() => layout(hall), [hall])
-  const mesh = useRef<THREE.InstancedMesh>(null)
+  const open = useMemo(() => items.filter((i) => !taken.has(i.seat.id)), [items, taken])
+  const shut = useMemo(() => items.filter((i) => taken.has(i.seat.id)), [items, taken])
+  const mesh = useRef<THREE.InstancedMesh>(null), takenMesh = useRef<THREE.InstancedMesh>(null)
+  const edge = useRef<THREE.InstancedMesh>(null), glow = useRef<THREE.InstancedMesh>(null), hoverEdge = useRef<THREE.InstancedMesh>(null)
+  const edgeMat = useRef<THREE.MeshBasicMaterial>(null), glowMat = useRef<THREE.MeshBasicMaterial>(null)
+  const velvet = useRef<THREE.MeshPhysicalMaterial>(null)
   const geo = useMemo(() => {
     const cushion = new THREE.BoxGeometry(0.5, 0.18, 0.5).translate(0, 0.35, 0)
     const back = new THREE.BoxGeometry(0.5, 0.6, 0.12).rotateX(-0.12).translate(0, 0.7, 0.25)
@@ -68,38 +89,74 @@ function Seats({ hall, taken, selected, hovered, onPick, onHover }: Pick<HallSce
     cushion.dispose(); back.dispose()
     return g
   }, [])
+  const edgeGeo = useMemo(() => edgeGeometry(1), []), glowGeo = useMemo(() => edgeGeometry(2.6), [])
   const tmp = useMemo(() => new THREE.Object3D(), [])
+  const MAXSEL = 8
 
   useEffect(() => {
-    const m = mesh.current!
-    items.forEach(({ seat, pos }, i) => {
+    const m = mesh.current!, t = takenMesh.current!
+    open.forEach(({ seat, pos }, i) => {
       const sel = selected.includes(seat.id)
-      tmp.position.set(pos.x, pos.y + (sel ? 0.08 : 0), pos.z)
-      tmp.updateMatrix()
-      m.setMatrixAt(i, tmp.matrix)
-      m.setColorAt(i, taken.has(seat.id) ? C.taken : sel ? C.selected : hovered?.id === seat.id ? C.hover : seat.type === 'access' ? C.access : C.free)
+      tmp.position.set(pos.x, pos.y + (sel ? 0.08 : 0), pos.z); tmp.updateMatrix(); m.setMatrixAt(i, tmp.matrix)
+      m.setColorAt(i, seat.type === 'access' ? C.access : hovered?.id === seat.id && !sel ? C.hover : C.free)
     })
-    m.instanceMatrix.needsUpdate = true
-    if (m.instanceColor) m.instanceColor.needsUpdate = true
-    m.computeBoundingSphere()
-  }, [items, taken, selected, hovered, tmp])
+    m.count = open.length
+    shut.forEach(({ pos }, i) => { tmp.position.set(pos.x, pos.y, pos.z); tmp.updateMatrix(); t.setMatrixAt(i, tmp.matrix) })
+    t.count = shut.length
+    for (const x of [m, t]) { x.instanceMatrix.needsUpdate = true; if (x.instanceColor) x.instanceColor.needsUpdate = true; x.computeBoundingSphere() }
+    const sel = open.filter((i) => selected.includes(i.seat.id)).slice(0, MAXSEL)
+    for (const e of [edge.current!, glow.current!]) {
+      sel.forEach(({ pos }, i) => { tmp.position.set(pos.x, pos.y + 0.08, pos.z); tmp.updateMatrix(); e.setMatrixAt(i, tmp.matrix) })
+      e.count = sel.length; e.instanceMatrix.needsUpdate = true
+    }
+    const h = hovered && !selected.includes(hovered.id) && !taken.has(hovered.id) ? items.find((i) => i.seat.id === hovered.id) : undefined
+    if (h) { tmp.position.set(h.pos.x, h.pos.y, h.pos.z); tmp.updateMatrix(); hoverEdge.current!.setMatrixAt(0, tmp.matrix) }
+    hoverEdge.current!.count = h ? 1 : 0; hoverEdge.current!.instanceMatrix.needsUpdate = true
+  }, [items, open, shut, taken, selected, hovered, tmp])
 
-  const handle = (e: ThreeEvent<PointerEvent | MouseEvent>, kind: 'move' | 'click') => {
+  // §14 in-place quality drop also drops sheen + normal map (one recompile, at the drop only)
+  useEffect(() => { const v = velvet.current; if (!v || !low) return; v.sheen = 0; v.normalMap = null; v.needsUpdate = true }, [low])
+  // §15 pulse: opacity 0.7 -> 1 over 1.5s; reduced motion = steady
+  useFrame(({ clock }) => {
+    const k = still ? 1 : 0.85 + 0.15 * Math.cos(clock.elapsedTime * (2 * Math.PI / 1.5))
+    if (edgeMat.current) edgeMat.current.opacity = k
+    if (glowMat.current) glowMat.current.opacity = 0.22 * k
+  })
+
+  const handle = (list: typeof items) => (e: ThreeEvent<PointerEvent | MouseEvent>, kind: 'move' | 'click') => {
     e.stopPropagation()
-    const item = e.instanceId != null ? items[e.instanceId] : undefined
+    const item = e.instanceId != null ? list[e.instanceId] : undefined
     if (!item) return
     if (kind === 'click') onPick(item.seat)
     else if (hovered?.id !== item.seat.id) onHover(item.seat)
   }
+  const ev = (list: typeof items) => ({
+    onClick: (e: ThreeEvent<MouseEvent>) => handle(list)(e, 'click'), onPointerMove: (e: ThreeEvent<PointerEvent>) => handle(list)(e, 'move'), onPointerOut: () => onHover(null),
+  })
+  const noRay = () => null
   return (
-    <instancedMesh ref={mesh} args={[geo, undefined, items.length]}
-      onClick={(e: ThreeEvent<MouseEvent>) => handle(e, 'click')} onPointerMove={(e: ThreeEvent<PointerEvent>) => handle(e, 'move')} onPointerOut={() => onHover(null)}>
-      <meshStandardMaterial roughness={0.9} />
-    </instancedMesh>
+    <>
+      <instancedMesh ref={mesh} args={[geo, undefined, items.length]} {...ev(open)}>
+        <meshPhysicalMaterial ref={velvet} roughness={0.8} sheen={0.7} sheenRoughness={0.45} sheenColor="#ff8a98" normalMap={looks.normal} normalScale={new THREE.Vector2(0.8, 0.8)} />
+      </instancedMesh>
+      <instancedMesh ref={takenMesh} args={[geo, undefined, items.length]} {...ev(shut)}>
+        <meshStandardMaterial color={TAKEN} roughness={0.95} />
+      </instancedMesh>
+      <instancedMesh ref={edge} args={[edgeGeo, undefined, MAXSEL]} raycast={noRay}>
+        <meshBasicMaterial ref={edgeMat} color="#F2B544" transparent toneMapped={false} />
+      </instancedMesh>
+      <instancedMesh ref={glow} args={[glowGeo, undefined, MAXSEL]} raycast={noRay}>
+        <meshBasicMaterial ref={glowMat} color="#F2B544" transparent opacity={0.22} blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+      </instancedMesh>
+      {/* desktop hover: faint gold rim at 40% */}
+      <instancedMesh ref={hoverEdge} args={[edgeGeo, undefined, 1]} raycast={noRay}>
+        <meshBasicMaterial color="#F2B544" transparent opacity={0.4} toneMapped={false} />
+      </instancedMesh>
+    </>
   )
 }
 
-function Room({ hall, low }: { hall: Hall; low?: boolean }) {
+function Room({ hall, looks }: { hall: Hall; looks: HallLooks }) {
   const rows = hall.rows.length
   const width = hall.columns * SPACING_X + 3
   const screenTex = useMemo(() => {
@@ -122,17 +179,18 @@ function Room({ hall, low }: { hall: Hall; low?: boolean }) {
   return (
     <group>
       {/* floor + stepped risers */}
-      <mesh rotation-x={-Math.PI / 2} position={[0, -0.01, 8]}><planeGeometry args={[width + 2, 30]} /><meshStandardMaterial color="#121218" /></mesh>
+      <mesh rotation-x={-Math.PI / 2} position={[0, -0.01, 8]}><planeGeometry args={[width + 2, 30]} /><meshBasicMaterial map={looks.floor} /></mesh>
       {hall.rows.map((_, ri) => (
         <mesh key={ri} position={[0, ri * ROW_RISE / 2, FIRST_ROW_Z + ri * ROW_DEPTH + 0.1]}>
           <boxGeometry args={[width, ri * ROW_RISE + 0.01, ROW_DEPTH]} />
-          <meshStandardMaterial color="#1a1a22" />
+          {/* §15 baked: AO band x per-row screen falloff (unlit) */}
+          <meshBasicMaterial map={looks.riser} color={new THREE.Color('#5a3a3c').multiplyScalar(rowGlow(ri))} />
         </mesh>
       ))}
       {/* side walls with step lights */}
       {[-1, 1].map((s) => (
         <group key={s}>
-          <mesh position={[s * (width / 2 + 0.6), 3, 8]} rotation-y={-s * Math.PI / 2}><planeGeometry args={[30, 8]} /><meshStandardMaterial color="#17131a" side={THREE.DoubleSide} /></mesh>
+          <mesh position={[s * (width / 2 + 0.6), 3, 8]} rotation-y={-s * Math.PI / 2}><planeGeometry args={[30, 8]} /><meshBasicMaterial map={s < 0 ? looks.wallL : looks.wallR} side={THREE.DoubleSide} /></mesh>
           {hall.rows.map((_, ri) => (
             <mesh key={ri} position={[s * (width / 2 + 0.55), ri * ROW_RISE + 0.25, FIRST_ROW_Z + ri * ROW_DEPTH]}>
               <boxGeometry args={[0.05, 0.08, 0.3]} /><meshBasicMaterial color="#F2B544" />
@@ -145,14 +203,14 @@ function Room({ hall, low }: { hall: Hall; low?: boolean }) {
       <mesh position={[0, SCREEN.y, SCREEN.z]}><planeGeometry args={[SCREEN.w, SCREEN.h]} /><meshBasicMaterial ref={mat} map={screenTex} toneMapped={false} /></mesh>
       <mesh position={[0, SCREEN.y, SCREEN.z - 0.05]}><planeGeometry args={[SCREEN.w + 0.4, SCREEN.h + 0.4]} /><meshBasicMaterial color="#050507" /></mesh>
       <pointLight position={[0, SCREEN.y, 2]} intensity={60} distance={30} color="#f6dcb0" />
-      {!low && [-1, 1].map((s) => [6, 10, 14].map((z) => <pointLight key={`${s}${z}`} position={[s * (width / 2), 0.6, z]} intensity={1.2} distance={4} color="#F2B544" />))}
+      {/* §15: the 6 aisle point lights are gone; their glow is in the bake, the step dots stay */}
       <ambientLight intensity={0.5} />
       <hemisphereLight args={["#f6dcb0", "#0B0B0F", 0.6]} />
     </group>
   )
 }
 
-function CameraRig({ hall, focusSeat, resetKey, instant }: Pick<HallSceneProps, 'hall' | 'focusSeat' | 'resetKey' | 'instant'>) {
+function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallSceneProps, 'hall' | 'focusSeat' | 'resetKey' | 'instant' | 'phone'>) {
   const { camera, gl } = useThree()
   const items = useMemo(() => layout(hall), [hall])
   const from = useRef({ pos: new THREE.Vector3(), look: new THREE.Vector3() })
@@ -172,7 +230,7 @@ function CameraRig({ hall, focusSeat, resetKey, instant }: Pick<HallSceneProps, 
   useEffect(() => {
     if (!focusSeat) return
     const item = items.find((i) => i.seat.id === focusSeat.id)
-    if (item) { go(eye(item.pos)) }
+    if (item) { go(eye(item.pos, phone)) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusSeat])
   useEffect(() => {
@@ -272,11 +330,14 @@ function FpsGuard({ onSlow, forceSlow }: { onSlow: () => void; forceSlow?: boole
   return null
 }
 
-export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; fpsGuard?: boolean; fpsForceSlow?: boolean; onStillSlow?: () => void; paused?: boolean }) {
+export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; fpsGuard?: boolean; fpsForceSlow?: boolean; onStillSlow?: () => void; paused?: boolean; applyLooks?: boolean }) {
+  // §15 textures: placeholders now, real webp files fetched once the curtains are gone
+  const looks = useMemo(() => makeHallLooks(), [])
+  useEffect(() => { if (p.applyLooks) looks.load() }, [p.applyLooks, looks])
   const maxDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2)
   const [dpr, setDpr] = useState(maxDpr)
   // §14 stage 0: full quality; 1: quality dropped IN PLACE (DPR 1 -> 0.75 on hi-dpi phones, no adaptive incline,
-  // no extra point lights) on the same Canvas/GL context, no remount; 2: still slow -> told parent (one-time toast).
+  // velvet sheen + normal map off) on the same Canvas/GL context, no remount; 2: still slow -> told parent (one-time toast).
   const [stage, setStage] = useState(0)
   const low = stage > 0
   const lowDpr = maxDpr > 1.5 ? 0.75 : 1
@@ -290,7 +351,7 @@ export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; 
       dpr={low ? lowDpr : dpr}
       // fix6: frozen while the curtains slide, so software/weak GPUs give the compositor the whole frame budget
       frameloop={p.paused || !compiled ? 'never' : 'always'}
-      camera={{ fov: 55, near: 0.1, far: 80 }}
+      camera={{ fov: p.phone ? 66 : 55, near: 0.1, far: 80 }}
       gl={{ antialias: !p.phone, powerPreference: 'high-performance' }}
       shadows={false}
       onCreated={({ gl, scene }) => {
@@ -303,11 +364,11 @@ export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; 
     >
       {!low && <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(maxDpr)} />}
       {p.fpsGuard && stage < 2 && <FpsGuard key={stage} forceSlow={p.fpsForceSlow} onSlow={() => { if (stage === 0) setStage(1); else { setStage(2); p.onStillSlow?.() } }} />}
-      <Room hall={p.hall} low={low} />
-      {built && <Seats {...p} />}
+      <Room hall={p.hall} looks={looks} />
+      {built && <Seats {...p} looks={looks} low={low} still={p.instant} />}
       <FirstFrame onReady={p.onReady} />
       {built && !compiled && <Warmup onDone={() => setCompiled(true)} />}
-      <CameraRig hall={p.hall} focusSeat={p.focusSeat} resetKey={p.resetKey} instant={p.instant} />
+      <CameraRig hall={p.hall} focusSeat={p.focusSeat} resetKey={p.resetKey} instant={p.instant} phone={p.phone} />
     </Canvas>
     </div>
   )

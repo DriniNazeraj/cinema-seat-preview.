@@ -30,8 +30,11 @@ export function prefetchHall3D() {
       l.onload = () => { if (--left === 0) try { sessionStorage.setItem(KEY, '1') } catch { /* private mode */ } }
       document.head.appendChild(l)
     }
-    const img = document.createElement('link'); img.rel = 'prefetch'; img.as = 'image'; img.href = '/velvet-tile.webp'
-    document.head.appendChild(img)
+    // fix8 §15: hall lightmap atlas + velvet normal map ride the same prefetch (never preloaded in HTML)
+    for (const href of ['/velvet-tile.webp', '/hall/hall-light.webp', '/hall/velvet-normal.webp']) {
+      const img = document.createElement('link'); img.rel = 'prefetch'; img.as = 'image'; img.href = href
+      document.head.appendChild(img)
+    }
   }
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (w.requestIdleCallback) w.requestIdleCallback(go, { timeout: 1500 })
