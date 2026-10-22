@@ -93,9 +93,29 @@ export type Booking = z.infer<typeof BookingSchema>
 
 // ---------------------------------------------------------------- money and tickets
 
-/** Adult and child only. There is no senior type. */
-export const TicketTypeSchema = z.enum(['adult', 'child'])
+/** Adult, child, and disabled. There is no senior type. */
+export const TicketTypeSchema = z.enum(['adult', 'child', 'disabled'])
 export type TicketType = z.infer<typeof TicketTypeSchema>
+
+/**
+ * Placeholder tariff in integer cents. Same for every format.
+ * Not a real price list. [PH]
+ */
+export const PLACEHOLDER_TICKET_PRICES = {
+  adult: 1200,
+  child: 800,
+  disabled: 800,
+} as const satisfies Record<TicketType, number>
+
+/**
+ * Ticket types that satisfy the at-least-one rule. Child does not.
+ * This array is the whole rule.
+ */
+export const COUNTS_AS_ADULT = ['adult', 'disabled'] as const satisfies readonly TicketType[]
+
+export function countsAsAdult(tickets: readonly { ticketType: string }[]): boolean {
+  return tickets.some((ticket) => (COUNTS_AS_ADULT as readonly string[]).includes(ticket.ticketType))
+}
 
 /** Authoritative price. Integer cents, never a float. */
 export const TicketPriceSchema = z.object({
@@ -105,7 +125,9 @@ export const TicketPriceSchema = z.object({
 })
 export type TicketPrice = z.infer<typeof TicketPriceSchema>
 
-export const CHILD_ONLY_MESSAGE = 'A booking must include at least one adult ticket.'
+export const CHILD_ONLY_MESSAGE = 'A booking must include at least one adult or disabled ticket.'
+export const ACCESS_SEAT_MISMATCH_MESSAGE =
+  'A disabled ticket must be on an access seat, and an access seat must have a disabled ticket.'
 
 /**
  * Show JSON on the wire. `price` stays the mock field (adult price in euros,
@@ -113,14 +135,15 @@ export const CHILD_ONLY_MESSAGE = 'A booking must include at least one adult tic
  */
 export const ShowResponseSchema = ShowSchema.extend({
   currency: z.literal(CURRENCY),
-  ticketPrices: z.array(TicketPriceSchema).length(2),
+  ticketPrices: z.array(TicketPriceSchema).length(3),
 }).superRefine((show, ctx) => {
   const adult = show.ticketPrices.find((t) => t.ticketType === 'adult')
   const child = show.ticketPrices.find((t) => t.ticketType === 'child')
-  if (!adult || !child) {
+  const disabled = show.ticketPrices.find((t) => t.ticketType === 'disabled')
+  if (!adult || !child || !disabled) {
     ctx.addIssue({
       code: 'custom',
-      message: 'ticketPrices must include one adult and one child price',
+      message: 'ticketPrices must include one adult, one child, and one disabled price',
       path: ['ticketPrices'],
     })
     return
@@ -136,6 +159,9 @@ export const ShowResponseSchema = ShowSchema.extend({
 export type ShowResponse = z.infer<typeof ShowResponseSchema>
 
 // ---------------------------------------------------------------- seat map
+
+export const SeatKindSchema = z.enum(['standard', 'access', 'companion'])
+export type SeatKind = z.infer<typeof SeatKindSchema>
 
 export const SeatStatusSchema = z.enum(['available', 'held', 'booked'])
 export type SeatStatus = z.infer<typeof SeatStatusSchema>
@@ -153,6 +179,12 @@ export const SeatStatusEntrySchema = z.object({
  */
 export const SeatMapResponseSchema = SeatMapSchema.extend({
   show: ShowResponseSchema,
+  hall: HallSchema.extend({
+    rows: z.array(z.object({
+      label: z.string(),
+      seats: z.array(SeatSchema.extend({ kind: SeatKindSchema })),
+    })),
+  }),
   statuses: z.array(SeatStatusEntrySchema),
 }).superRefine((map, ctx) => {
   const hallIds: string[] = []
@@ -262,7 +294,7 @@ export const CreateBookingBodySchema = z
     if (duplicateIds(ids).length) {
       ctx.addIssue({ code: 'custom', message: 'Seats must be unique.', path: ['tickets'] })
     }
-    if (!body.tickets.some((t) => t.ticketType === 'adult')) {
+    if (!countsAsAdult(body.tickets)) {
       ctx.addIssue({ code: 'custom', message: CHILD_ONLY_MESSAGE, path: ['tickets'] })
     }
   })
@@ -307,7 +339,7 @@ export const BookingRecordSchema = z
     if (duplicateIds(ids).length || !sameIds(ids, booking.seats)) {
       ctx.addIssue({ code: 'custom', message: 'seats must be the ticket seat ids', path: ['seats'] })
     }
-    if (!booking.tickets.some((t) => t.ticketType === 'adult')) {
+    if (!countsAsAdult(booking.tickets)) {
       ctx.addIssue({ code: 'custom', message: CHILD_ONLY_MESSAGE, path: ['tickets'] })
     }
     const sum = booking.tickets.reduce((n, t) => n + t.priceCents, 0)
@@ -351,10 +383,13 @@ export const ERROR_CODES = [
   'HOLD_CONSUMED',
   'HOLD_SEAT_MISMATCH',
   'CHILD_ONLY_BOOKING',
+  'ACCESS_SEAT_MISMATCH',
   'SHOW_SOLD_OUT',
   'BOOKING_NOT_CONFIRMABLE',
   'CONFLICT',
   'RATE_LIMITED',
+  'PAYLOAD_TOO_LARGE',
+  'UNAVAILABLE',
   'INTERNAL',
 ] as const
 export type ErrorCode = (typeof ERROR_CODES)[number]
@@ -367,10 +402,13 @@ export const ERROR_STATUS = {
   HOLD_CONSUMED: 409,
   HOLD_SEAT_MISMATCH: 409,
   CHILD_ONLY_BOOKING: 422,
+  ACCESS_SEAT_MISMATCH: 422,
   SHOW_SOLD_OUT: 409,
   BOOKING_NOT_CONFIRMABLE: 409,
   CONFLICT: 409,
   RATE_LIMITED: 429,
+  PAYLOAD_TOO_LARGE: 413,
+  UNAVAILABLE: 503,
   INTERNAL: 500,
 } as const satisfies Record<ErrorCode, number>
 
@@ -387,17 +425,20 @@ export const ERROR_MESSAGE: Record<ErrorCode, string> = {
   HOLD_CONSUMED: 'That hold was already used.',
   HOLD_SEAT_MISMATCH: 'Those seats do not match the hold.',
   CHILD_ONLY_BOOKING: CHILD_ONLY_MESSAGE,
+  ACCESS_SEAT_MISMATCH: ACCESS_SEAT_MISMATCH_MESSAGE,
   SHOW_SOLD_OUT: 'This show is sold out.',
   BOOKING_NOT_CONFIRMABLE: 'This booking can no longer be confirmed.',
   CONFLICT: 'That request conflicts with the current booking.',
   RATE_LIMITED: 'Too many requests. Try again shortly.',
+  PAYLOAD_TOO_LARGE: 'Request body is too large.',
+  UNAVAILABLE: 'Service unavailable.',
   INTERNAL: 'Something went wrong.',
 }
 
 const errorFields = z.record(z.string(), z.string()).optional()
 const errorMessage = z.string().min(1)
 
-function simpleError<C extends Exclude<ErrorCode, 'SEAT_TAKEN'>>(code: C) {
+function simpleError<C extends Exclude<ErrorCode, 'SEAT_TAKEN' | 'ACCESS_SEAT_MISMATCH'>>(code: C) {
   return z.object({
     code: z.literal(code),
     message: errorMessage,
@@ -413,6 +454,13 @@ export const ApiErrorSchema = z.discriminatedUnion('code', [
     seatIds: z.array(SeatId).min(1),
     fields: errorFields,
   }),
+  z.object({
+    code: z.literal('ACCESS_SEAT_MISMATCH'),
+    message: errorMessage,
+    /** Seats whose ticket does not match the access rule. Always at least one. */
+    seatIds: z.array(SeatId).min(1),
+    fields: errorFields,
+  }),
   simpleError('VALIDATION_ERROR'),
   simpleError('NOT_FOUND'),
   simpleError('HOLD_EXPIRED'),
@@ -423,6 +471,8 @@ export const ApiErrorSchema = z.discriminatedUnion('code', [
   simpleError('BOOKING_NOT_CONFIRMABLE'),
   simpleError('CONFLICT'),
   simpleError('RATE_LIMITED'),
+  simpleError('PAYLOAD_TOO_LARGE'),
+  simpleError('UNAVAILABLE'),
   simpleError('INTERNAL'),
 ])
 export type ApiError = z.infer<typeof ApiErrorSchema>
@@ -448,10 +498,15 @@ export const GetSeatMapResponseSchema = apiOk(SeatMapResponseSchema)
 export const HoldResponseSchema = apiOk(HoldSchema)
 export const ReleaseHoldResponseSchema = apiOk(ReleasedHoldSchema)
 export const BookingResponseSchema = apiOk(BookingRecordSchema)
+export const HealthResponseSchema = apiOk(z.object({
+  status: z.literal('ok'),
+  db: z.literal('ok'),
+}))
 
 // ---------------------------------------------------------------- routes and limits
 
 export const routes = {
+  health: '/api/health',
   movies: '/api/movies',
   movie: (id: string) => `/api/movies/${encodeURIComponent(id)}`,
   shows: '/api/shows',

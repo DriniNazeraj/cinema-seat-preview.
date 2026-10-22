@@ -1,6 +1,6 @@
 # Lumen Cinema HTTP API
 
-Contract for the booking back end. This repo does not implement it. `src/lib/api-contract.ts` is the zod module the server, and later the front end, import. It has no server imports. `MovieSchema`, `ShowSchema`, `SeatSchema`, `SeatMapSchema`, `BookingInputSchema`, and `BookingSchema` in that file match `src/lib/api.ts`. The mock keeps its own copy of those six schemas so the current client bundle does not load the hold and booking wire schemas.
+Contract for the booking back end. The server in [`server/`](../server/) implements it (see [`docs/server.md`](server.md)). The Vite client still uses the mock. `src/lib/api-contract.ts` is the zod module the server, and later the front end, import. It has no server imports. `MovieSchema`, `ShowSchema`, `SeatSchema`, `SeatMapSchema`, `BookingInputSchema`, and `BookingSchema` in that file match `src/lib/api.ts`. The mock keeps its own copy of those six schemas so the current client bundle does not load the hold and booking wire schemas.
 
 The planned server is Express + TypeScript, Postgres via `pg`, zod for every request and response, `express-rate-limit`, `helmet`, and `cors`. No payment provider.
 
@@ -20,7 +20,7 @@ Failure:
 { "ok": false, "error": { "code": "NOT_FOUND", "message": "Not found." } }
 ```
 
-`error.fields` is optional. Keys are the form field (`name`, `email`, `phone`, `seats`, `tickets`, `holdId`, `showId`) or a dotted path (`tickets.0.ticketType`). `error.seatIds` exists only on `SEAT_TAKEN`.
+`error.fields` is optional. Keys are the form field (`name`, `email`, `phone`, `seats`, `tickets`, `holdId`, `showId`) or a dotted path (`tickets.0.ticketType`). `error.seatIds` is present on `SEAT_TAKEN` and `ACCESS_SEAT_MISMATCH`.
 
 Timestamps are ISO-8601 UTC from `Date#toISOString()` (`2026-10-22T11:30:00.000Z`). Seat ids match `/^[A-Z]\d{1,2}$/` (`A1`, `J16`). A booking holds at most `MAX_SEATS` (8) seats, and the seat ids in one request are unique.
 
@@ -32,15 +32,15 @@ There is no login. A hold id (UUID) and a booking `ref` are capabilities: anyone
 
 Ticket prices and booking totals are integer cents plus `currency: "EUR"`. The client never sends a price. The server snapshots `ticket_prices` onto the booking inside the create transaction.
 
-`Show.price` stays the mock's field: the **adult** price in euros (`900` cents → `9`), so the current `eur(show.price)` formatter still works. `Show.ticketPrices` is authoritative. Placeholder catalogue, stored in the database, not computed in the client:
+`Show.price` stays the mock's field: the **adult** price in euros (`1200` cents → `12`), so the current `eur(show.price)` formatter still works. `Show.ticketPrices` is authoritative. Placeholder catalogue, stored in the database, not computed in the client. The same three prices apply to every format. They live in `PLACEHOLDER_TICKET_PRICES` in `src/lib/api-contract.ts` and are marked `[PH]` there:
 
-| format | adult | child |
-|---|---:|---:|
-| 2D | 900 | 600 |
-| 3D | 1200 | 800 |
-| IMAX | 1500 | 1000 |
+| ticket | cents |
+|---|---:|
+| adult | 1200 |
+| child | 800 |
+| disabled | 800 |
 
-There is no senior ticket.
+There is no senior ticket. These cents are placeholders, not a real tariff.
 
 ### Time zone
 
@@ -55,8 +55,23 @@ There is no senior ticket.
 | `CINEMA_TZ` | `Europe/Berlin` | Date filter and any server-side calendar day. |
 | `CORS_ORIGIN` | front-end origin | `cors` allow-list. No cookies. |
 | `PORT` | process default | HTTP port. |
+| `TRUST_PROXY` | `0` | Hop count for `req.ip`. `0` trusts none, so the rate limit uses the socket address and ignores a client-supplied `X-Forwarded-For`. Set it to the number of proxies in front of the process when hosted. |
 
 `HOLD_SECONDS` must be a positive integer. Clients do not assume 600 seconds; they read `holdExpiresAt`.
+
+## Health
+
+### `GET /api/health`
+
+Not rate limited. `Cache-Control: no-store`. Runs `SELECT 1`.
+
+`200`
+
+```json
+{ "ok": true, "data": { "status": "ok", "db": "ok" } }
+```
+
+Database unreachable: `503` `UNAVAILABLE`.
 
 ## Reads
 
@@ -85,17 +100,18 @@ Query: `movieId` (optional), `date` (`YYYY-MM-DD`, optional). Same names as `lis
   "start": "2026-10-22T11:30:00.000Z",
   "format": "2D",
   "hallId": "h1",
-  "price": 9,
+  "price": 12,
   "soldOut": false,
   "currency": "EUR",
   "ticketPrices": [
-    { "ticketType": "adult", "priceCents": 900, "currency": "EUR" },
-    { "ticketType": "child", "priceCents": 600, "currency": "EUR" }
+    { "ticketType": "adult", "priceCents": 1200, "currency": "EUR" },
+    { "ticketType": "child", "priceCents": 800, "currency": "EUR" },
+    { "ticketType": "disabled", "priceCents": 800, "currency": "EUR" }
   ]
 }
 ```
 
-`format` is `2D`, `3D`, or `IMAX`. `soldOut` is true when the show is closed or no seat is available (an expired hold is not an occupied seat). `price` is `adult.priceCents / 100`.
+`format` is `2D`, `3D`, or `IMAX`. `soldOut` is true when the show is closed or no seat is available (an expired hold is not an occupied seat). `price` is `adult.priceCents / 100`. `ticketPrices` lists adult, child, and disabled, in that order.
 
 Bad `date`: `400` `VALIDATION_ERROR`.
 
@@ -120,7 +136,7 @@ Query: `holdId` (optional UUID).
       {
         "label": "A",
         "seats": [
-          { "id": "A1", "row": "A", "n": 1, "x": 0, "type": "std" }
+          { "id": "A1", "row": "A", "n": 1, "x": 0, "type": "std", "kind": "standard" }
         ]
       }
     ]
@@ -133,7 +149,7 @@ Query: `holdId` (optional UUID).
 }
 ```
 
-`hall.rows[].seats[]` is the grid. `type` is the seat kind: `std` or `access` (the mock's wheelchair spaces). `x` is the column index and already includes aisle gaps. The placeholder halls are rows `A`–`J`, 16 seats in blocks of 4 / 8 / 4 (`columns` 18). The schema allows any hall with those fields; the client renders `hall`, it does not assume 10×16 except where it already does.
+`hall.rows[].seats[]` is the grid. `type` is the mock field: `std` or `access`. `kind` is `standard`, `access`, or `companion`. `x` is the column index and already includes aisle gaps. The placeholder halls are rows `A`–`J`, 16 seats in blocks of 4 / 8 / 4 (`columns` 18). On the last row, the two outermost seats at each end are `access` (four seats: `J1`, `J2`, `J15`, `J16`), and the seat just inside each pair is `companion` (`J3`, `J14`). Every other seat is `standard`. The schema allows any hall with those fields; the client renders `hall`, it does not assume 10×16 except where it already does. A client that still parses with `SeatSchema` drops `kind`.
 
 `statuses` has one entry per hall seat. `status` is `available`, `held`, or `booked`.
 
@@ -249,7 +265,9 @@ Expired holds free themselves without a client call.
 
 ## Bookings
 
-Ticket type is per seat: `adult` or `child`. A booking with no adult is rejected. The check runs in the create transaction before any row is written, and `CreateBookingBodySchema` rejects it too. The HTTP code is `CHILD_ONLY_BOOKING`, not `VALIDATION_ERROR`, when that is the reason.
+Ticket type is per seat: `adult`, `child`, or `disabled`. One booking holds at most 8 tickets, counting every type together. A booking needs at least one adult or disabled ticket. That list is `COUNTS_AS_ADULT` in `src/lib/api-contract.ts`. A child-only booking is rejected. The check runs in `CreateBookingBodySchema` and again in the create transaction before any row is written. The HTTP code is `CHILD_ONLY_BOOKING`, not `VALIDATION_ERROR`, when that is the reason. An unknown `ticketType` is `400` `VALIDATION_ERROR`.
+
+A `disabled` ticket must be on an `access` seat, and an `access` seat must have a `disabled` ticket. Companion and standard seats take `adult` or `child`. A hold may include access seats; the check runs when the booking is created. A mismatch is `422` `ACCESS_SEAT_MISMATCH`, and `error.seatIds` lists the seats that break the rule, in hold order.
 
 ### `POST /api/bookings`
 
@@ -282,15 +300,15 @@ Creates a **pending** booking from a live hold. Limiter: 8 / 10 minutes / IP. Op
     "name": "Ada Lovelace",
     "email": "ada@example.com",
     "phone": "+355000000",
-    "total": 1500,
+    "total": 2000,
     "currency": "EUR",
     "createdAt": "2026-10-22T11:51:00.000Z",
     "status": "pending",
     "holdId": "5b1d1c0a-3e4f-4a5b-8c6d-7e8f90123456",
     "holdExpiresAt": "2026-10-22T12:00:00.000Z",
     "tickets": [
-      { "seatId": "A1", "ticketType": "adult", "priceCents": 900 },
-      { "seatId": "A2", "ticketType": "child", "priceCents": 600 }
+      { "seatId": "A1", "ticketType": "adult", "priceCents": 1200 },
+      { "seatId": "A2", "ticketType": "child", "priceCents": 800 }
     ]
   }
 }
@@ -302,8 +320,9 @@ The hold stays live. Occupancy rows stay `kind = 'hold'` until confirm. One pend
 
 | condition | status | code |
 |---|---|---|
-| bad body, duplicate seats | 400 | `VALIDATION_ERROR` |
-| no adult ticket | 422 | `CHILD_ONLY_BOOKING` |
+| bad body, duplicate seats, unknown ticket type, more than 8 tickets | 400 | `VALIDATION_ERROR` |
+| no adult or disabled ticket | 422 | `CHILD_ONLY_BOOKING` |
+| disabled ticket off an access seat, or access seat without a disabled ticket | 422 | `ACCESS_SEAT_MISMATCH` |
 | hold id unknown | 404 | `NOT_FOUND` |
 | hold expired or released | 409 | `HOLD_EXPIRED` |
 | hold already confirmed | 409 | `HOLD_CONSUMED` |
@@ -359,18 +378,21 @@ Already confirmed: `200` with the confirmed booking. Expired hold: `409` `HOLD_E
 | `HOLD_EXPIRED` | 409 | Refresh, booking create, or confirm found a hold that is not live. Refresh uses this for every not-live hold. |
 | `HOLD_CONSUMED` | 409 | The hold already became a confirmed booking. Release must not free those seats. |
 | `HOLD_SEAT_MISMATCH` | 409 | Ticket seats are not exactly the hold's seats. |
-| `CHILD_ONLY_BOOKING` | 422 | The booking has no adult ticket. |
+| `CHILD_ONLY_BOOKING` | 422 | The booking has no adult or disabled ticket. |
+| `ACCESS_SEAT_MISMATCH` | 422 | A disabled ticket is not on an access seat, or an access seat does not have a disabled ticket. `seatIds` lists those seats. |
 | `SHOW_SOLD_OUT` | 409 | Hold requested on a sold-out show. |
 | `BOOKING_NOT_CONFIRMABLE` | 409 | Confirm cannot move this booking to `confirmed`. |
 | `CONFLICT` | 409 | Same hold booked again with a different body, or an unexpected unique violation. |
 | `RATE_LIMITED` | 429 | Hold or booking limiter. |
+| `PAYLOAD_TOO_LARGE` | 413 | JSON body is larger than 32 KiB. |
+| `UNAVAILABLE` | 503 | `GET /api/health` could not reach the database. |
 | `INTERNAL` | 500 | Unexpected failure. No stack trace in the body. |
 
 Codes are uppercase. The status map is `ERROR_STATUS` in `src/lib/api-contract.ts`.
 
 ## Rate limits
 
-`express-rate-limit`, one limiter per row, keyed by client IP. Behind a proxy, trust the proxy so the limit is not a single shared address.
+`express-rate-limit`, one limiter per row, keyed by `req.ip`. `TRUST_PROXY` is the hop count (default `0`). At `0` the socket address is the client, so a spoofed `X-Forwarded-For` does not open a new bucket. Set it to the number of proxies in front of the process when hosted. Do not set it to `true`.
 
 | route | limit | window |
 |---|---:|---|
@@ -382,7 +404,7 @@ Codes are uppercase. The status map is `ERROR_STATUS` in `src/lib/api-contract.t
 
 The limited response is the JSON envelope with `RATE_LIMITED`, not the package's default text body. Also send `Retry-After` (seconds) and draft-7 `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`.
 
-Catalogue `GET`s are outside these limiters.
+Catalogue `GET`s and `GET /api/health` are outside these limiters. JSON bodies larger than 32 KiB are `413` `PAYLOAD_TOO_LARGE`, not `400`.
 
 ## Idempotency
 
@@ -419,6 +441,7 @@ seats (
   n int not null,
   x int not null,
   type text not null check (type in ('std', 'access')),
+  kind text not null check (kind in ('standard', 'access', 'companion')),
   primary key (hall_id, id)
 )
 
@@ -433,7 +456,7 @@ shows (
 
 ticket_prices (
   show_id text not null references shows (id),
-  ticket_type text not null check (ticket_type in ('adult', 'child')),
+  ticket_type text not null check (ticket_type in ('adult', 'child', 'disabled')),
   price_cents int not null check (price_cents >= 0),
   currency text not null default 'EUR',
   primary key (show_id, ticket_type)
@@ -485,7 +508,7 @@ bookings (
 booking_seats (
   booking_id uuid not null references bookings (id),
   seat_id text not null,
-  ticket_type text not null check (ticket_type in ('adult', 'child')),
+  ticket_type text not null check (ticket_type in ('adult', 'child', 'disabled')),
   price_cents int not null,
   primary key (booking_id, seat_id)
 )
@@ -493,7 +516,7 @@ booking_seats (
 
 Index suggestion: `(expires_at) where kind = 'hold'` on `seat_occupancy`, for the sweeper.
 
-At least one adult is enforced in the create transaction (and by `CreateBookingBodySchema`). It is a business rule, not a uniqueness race. The seat lock is the primary key.
+At least one adult or disabled ticket is enforced in the create transaction (and by `CreateBookingBodySchema`). Each disabled ticket must sit on an access seat, and each access seat must carry a disabled ticket. Both are business rules, not a uniqueness race. The seat lock is the primary key.
 
 ## Fetcher names
 
@@ -523,15 +546,15 @@ The read path (`listMovies`, `getMovie`, `listShows`, `getShow`, and `getSeatMap
 
 4. **Own seats look taken after a refetch.** `taken` includes other people's holds. Seats in the caller's live hold are omitted from `taken` only when the map is loaded with `?holdId=`. `getSeatMap` currently takes just the show id. Coming back to the seat page after a hold needs that query, or `pick` refuses the seats (`taken.has(seat.id)`).
 
-5. **Held vs booked.** The map UI has `free | taken | selected` (`SeatMap2D`). The API adds `statuses[]` with `available | held | booked`. Parsing with `SeatMapSchema` drops `statuses`. Held and booked both render as taken until the map reads `statuses`. Seat kind stays `type: "std" | "access"`.
+5. **Held vs booked.** The map UI has `free | taken | selected` (`SeatMap2D`). The API adds `statuses[]` with `available | held | booked`. Parsing with `SeatMapSchema` drops `statuses`. Held and booked both render as taken until the map reads `statuses`. The mock `type` stays `"std" | "access"`. The API also sends `kind`: `"standard" | "access" | "companion"`, which `SeatSchema` strips.
 
-6. **Ticket type per seat.** `BookingInputSchema` is `{ showId, seats, name, email, phone? }`. Create sends `{ holdId, name, email, phone?, tickets: [{ seatId, ticketType }] }` and does not send a price. The details form has no adult/child control. Child-only bookings are `422` `CHILD_ONLY_BOOKING`. There is no senior type. Do not add one.
+6. **Ticket type per seat.** `BookingInputSchema` is `{ showId, seats, name, email, phone? }`. Create sends `{ holdId, name, email, phone?, tickets: [{ seatId, ticketType }] }` and does not send a price. The details form has no adult/child/disabled control. Ticket types are `adult`, `child`, and `disabled`. A booking needs at least one adult or disabled ticket. Child-only bookings are `422` `CHILD_ONLY_BOOKING`. A disabled ticket must be on an access seat, and an access seat must have a disabled ticket (`422` `ACCESS_SEAT_MISMATCH`, with `error.seatIds`). There is no senior type. Do not add one.
 
 7. **One-shot create vs hold → pending → confirm.** `createBooking` checks `taken`, writes a booking, and the page navigates straight to `/booking/confirmed?ref=`. The API create leaves `status: "pending"`. The confirm button should `POST /api/bookings` and then `POST /api/bookings/:ref/confirm`. Confirm does not charge; the "Demo, no payment taken" copy can stay until the payment slot in the confirm section is filled. The client must not treat create as confirmed.
 
-8. **`Booking.total` and `placeholder`.** The mock `total` is `seats.length * show.price` in euros, and `BookingSchema` requires `placeholder: true`. The API `total` is integer cents, `currency` is `"EUR"`, and `placeholder` is absent. `getBooking` parses with `BookingSchema`, so a real payload will fail that parse until the client uses `BookingRecordSchema`. The confirmed page does not render `total`. The details summary still does `seats.length * show.price`, which charges every seat the adult price. Mixed adult/child totals have to sum `tickets[].priceCents`.
+8. **`Booking.total` and `placeholder`.** The mock `total` is `seats.length * show.price` in euros, and `BookingSchema` requires `placeholder: true`. The API `total` is integer cents, `currency` is `"EUR"`, and `placeholder` is absent. `getBooking` parses with `BookingSchema`, so a real payload will fail that parse until the client uses `BookingRecordSchema`. The confirmed page does not render `total`. The details summary still does `seats.length * show.price`, which charges every seat the adult price. Mixed totals have to sum `tickets[].priceCents`.
 
-9. **`Show.price` vs ticket prices.** `price` remains the adult price in euros (`9`, `12`, `15` for 2D / 3D / IMAX) so showtime pills and the seat tooltip keep working on a URL swap. `ticketPrices` and `currency` are extra and are stripped by `ShowSchema`. Child prices exist only on `ticketPrices`.
+9. **`Show.price` vs ticket prices.** `price` remains the adult price in euros (`12` while the placeholder tariff is adult 1200) so showtime pills and the seat tooltip keep working on a URL swap. `ticketPrices` and `currency` are extra and are stripped by `ShowSchema`. Child and disabled prices exist only on `ticketPrices`.
 
 10. **Null vs 404.** `getMovie`, `getShow`, and `getBooking` return `null` when the mock has no row. The API returns `404` `NOT_FOUND`. The wrappers should map that to `null` if the signatures stay. `getSeatMap` already throws; the seat page shows `ErrorCard`.
 
