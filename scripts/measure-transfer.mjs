@@ -5,7 +5,7 @@ const c = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: 
 const s = await c.newCDPSession(p); await s.send('Network.enable'); const bytes = new Map()
 s.on('Network.loadingFinished', (e) => bytes.set(e.requestId, e.encodedDataLength))
 const urls = new Map(); s.on('Network.responseReceived', (e) => urls.set(e.requestId, e.response.url))
-await p.goto('http://localhost:4175/movie/starlight-run/seats?3d=1'); await p.waitForSelector('[role="dialog"] [data-seat]', { timeout: 30000 })
+await p.goto('http://localhost:4175/movie/starlight-run/seats?3d=1&party=1'); await p.waitForSelector('[role="dialog"] [data-seat]', { timeout: 30000 })
 await p.waitForFunction(() => performance.getEntriesByName('lumen:hall-normal-applied').length > 0, null, { timeout: 15000 }).catch(() => console.log('maps not applied!'))
 await p.waitForTimeout(1500)
 let tot = 0; const rows = []

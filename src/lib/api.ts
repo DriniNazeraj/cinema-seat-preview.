@@ -214,5 +214,22 @@ export async function getBooking(ref: string): Promise<Booking | null> {
   } catch { return null }
 }
 
+// fix11: holds are created only at Continue (whole group). Mock of POST /api/holds and DELETE /api/holds/:id.
+// QA: sessionStorage 'lumen.qa.takeOnHold' = "C9,C10" makes those seats get taken just before the hold (SEAT_TAKEN 409).
+export class SeatTakenError extends Error { code = 'SEAT_TAKEN' as const; constructor(public seatIds: string[]) { super('SEAT_TAKEN') } }
+export async function createHold(showId: string, seatIds: string[]): Promise<{ id: string; holdExpiresAt: number }> {
+  await delay(200)
+  const map = await getSeatMap(showId)
+  let qaTake: string[] = []
+  try { qaTake = (sessionStorage.getItem('lumen.qa.takeOnHold') ?? '').split(',').filter(Boolean) } catch { /* ignore */ }
+  const lost = seatIds.filter((s) => map.taken.includes(s) || qaTake.includes(s))
+  if (lost.length) throw new SeatTakenError(lost)
+  return { id: 'hold_' + Math.random().toString(36).slice(2, 10), holdExpiresAt: Date.now() + HOLD_SECONDS * 1000 }
+}
+export async function releaseHoldApi(holdId: string): Promise<void> {
+  await delay(60)
+  try { const w = window as Window & { __lumenReleased?: string[] }; (w.__lumenReleased ??= []).push(holdId) } catch { /* ssr */ }
+}
+
 /** Sync accessors used only by the build-time prerenderer and SEO helpers. */
 export const __static = { movies: () => MOVIES, shows, dayKey }

@@ -1,3 +1,4 @@
+// SUPERSEDED in fix11: §15.y group picking replaced the per-seat toggle (unpick now only in Split mode, covered by qa-group-pick.mjs). Kept for history.
 // QA: pick C15, C16, unpick C16 -> camera must stay on C15 (not Overview); unpick C15 -> Overview.
 import { chromium } from 'playwright'
 const BASE = 'http://localhost:4174'

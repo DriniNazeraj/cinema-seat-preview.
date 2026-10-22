@@ -1,6 +1,6 @@
 // fix7: phone fit mode - a tap zooms (centred on the seat), never picks; next tap picks; Enter picks in fit mode; desktop click picks.
 import { chromium } from 'playwright'
-const OUT = '/workspace/cinema/final/flow-shots/fix7', URL = 'http://localhost:4175/movie/starlight-run/seats?simple=1'
+const OUT = '/workspace/cinema/final/flow-shots/fix7', URL = 'http://localhost:4175/movie/starlight-run/seats?simple=1&party=1'
 const b = await chromium.launch(); const r = {}; const errs = []
 const phone = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
 const state = (p, sel) => p.evaluate((sel) => { const e = document.querySelector(sel); if (!e) return { sheet: !!document.querySelector("[role=dialog]"), peekLabel: document.querySelector(`button[aria-label^="Selected:"]`)?.getAttribute("aria-label") }; const rc = e.getBoundingClientRect()

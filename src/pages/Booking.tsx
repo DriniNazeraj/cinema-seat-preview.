@@ -83,7 +83,7 @@ export default function BookingPage() {
           {show.data && <p className="text-sm text-text-muted">{dayLabel(show.data.start)} · {time(show.data.start)} · {show.data.format} · Hall {show.data.hallId.slice(1)} [PH]</p>}
           <div className="mt-3 flex flex-wrap gap-2">{b.seats.map((s) => <span key={s} className="rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-fg">{s}</span>)}</div>
           <div className="mt-4 flex justify-between border-t border-border pt-4"><span className="text-text-muted">{b.seats.length} × {eur(show.data?.price ?? 0)}</span><span className="font-semibold">{eur(b.seats.length * (show.data?.price ?? 0))} [PH]</span></div>
-          <Link to={seatsUrl} className="mt-4 block text-sm text-accent underline">Change seats</Link>
+          <Link to={seatsUrl} onClick={() => { b.releaseHold(); b.setSeats([]) }} className="mt-4 block text-sm text-accent underline">Change seats</Link>
         </Card>
       </Container>
     </div>

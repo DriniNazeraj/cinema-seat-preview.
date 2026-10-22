@@ -22,13 +22,17 @@ type Props = {
   shakeId?: string | null
   readOnly?: boolean
   compact?: boolean
+  /** fix11 §15.y: ghost preview of the block a click would place (desktop hover), rows to pulse once (Find N together), [ / ] shift */
+  preview?: Set<string>
+  pulseRows?: Set<string>
+  onShift?: (dir: -1 | 1) => void
 }
 
 let keptZoom = false
 /** seat page calls this on mount so a new visit starts in fit mode */
 export function resetSeatMapZoom() { keptZoom = false }
 
-export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shakeId, readOnly, compact }: Props) {
+export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shakeId, readOnly, compact, preview, pulseRows, onShift }: Props) {
   const firstFree = hall.rows.flatMap((r) => r.seats).find((s) => !taken.has(s.id))
   const [focusId, setFocusId] = useState<string | undefined>(selected[0] ?? firstFree?.id)
   const [tip, setTip] = useState<{ seat: Seat; x: number; top: number; bottom: number; below: boolean } | null>(null)
@@ -96,6 +100,7 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
   function onKey(e: KeyboardEvent, seat: Seat) {
     const k = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }[e.key]
     if (k) { e.preventDefault(); move(seat, k[0], k[1]) }
+    else if ((e.key === '[' || e.key === ']') && onShift) { e.preventDefault(); onShift(e.key === '[' ? -1 : 1) }
   }
 
   // compact = read-only mini map. Interactive: 44px hit target on mobile (visual 28px inside), 18px on sm+.
@@ -127,7 +132,7 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
         <div ref={ref} role="grid" data-seatgrid aria-label={`Seat map, ${hall.name}`} aria-readonly={readOnly || undefined} className={cn('mx-auto flex flex-col', compact ? 'w-max gap-[3px] sm:gap-1' : 'gap-[3px]')}
           style={compact ? undefined : { width: zoomed ? (hall.columns + 2) * 47 : '100%' }}>
           {hall.rows.map((row) => (
-            <div role="row" key={row.label} className={cn(compact ? 'flex items-center gap-[2px] sm:gap-1' : 'grid items-center gap-[3px]')}
+            <div role="row" key={row.label} data-pulse={pulseRows?.has(row.label) || undefined} className={cn(pulseRows?.has(row.label) && 'rounded-md ring-2 ring-accent/70 motion-safe:animate-[pulse_1.2s_ease-in-out_1]', compact ? 'flex items-center gap-[2px] sm:gap-1' : 'grid items-center gap-[3px]')}
               style={compact ? undefined : { gridTemplateColumns: `repeat(${hall.columns + 2}, minmax(0, 1fr))` }}>
               <span className={cn(labelCls, 'left-0')} aria-hidden>{row.label}</span>
               {Array.from({ length: hall.columns }, (_, x) => {
@@ -144,6 +149,7 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
                       aria-pressed={st === 'selected'}
                       aria-disabled={st === 'taken' || readOnly || undefined}
                       data-tapzoom={tapZooms || undefined}
+                      data-preview={(st === 'free' && preview?.has(seat.id)) || undefined}
                       onClick={(e) => {
                         if (readOnly) return
                         if (tapZooms && e.detail > 0) { zoomTo.current = seat.id; setFocusId(seat.id); setZoomed(true); return }
@@ -164,6 +170,7 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
                         vis, 'grid place-items-center rounded-t-md font-medium tabular-nums transition group-focus-visible:ring-2 group-focus-visible:ring-accent group-focus-visible:ring-offset-1 group-focus-visible:ring-offset-bg',
                         st === 'selected' ? 'bg-accent text-accent-fg' : st === 'taken' ? 'bg-taken/50 text-text-muted' : access ? 'bg-access text-white group-hover:ring-2 group-hover:ring-accent' : 'bg-velvet text-text/70 group-hover:ring-2 group-hover:ring-accent group-hover:brightness-125',
                         shakeId === seat.id && 'animate-shake',
+                        st === 'free' && preview?.has(seat.id) && 'ring-2 ring-accent/40',
                       )}>
                         {st === 'taken' ? <X className="size-3" /> : access ? <Accessibility className="size-3" /> : st === 'selected' ? <Check className="size-3" /> : showNum ? seat.n : null}
                       </span>

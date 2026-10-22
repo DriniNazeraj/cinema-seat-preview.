@@ -246,14 +246,16 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallScene
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey])
 
-  // drag to look around (clamped), springs back on release
+  // drag to look around (clamped), springs back on release.
+  // fix11 (DESIGN §15, Street View grab): drag right -> hall follows the finger -> camera looks LEFT (yaw +); drag down -> looks UP (pitch +).
+  // yaw used to be subtracted (looked toward the drag) while pitch was grab-style; same handler serves mouse + touch, overview + seat view.
   useEffect(() => {
     const el = gl.domElement
     const down = (e: PointerEvent) => { drag.current.active = true; drag.current.x = e.clientX; drag.current.y = e.clientY }
     const move = (e: PointerEvent) => {
       const d = drag.current
       if (!d.active) return
-      d.yaw = THREE.MathUtils.clamp(d.yaw - (e.clientX - d.x) * 0.004, -0.61, 0.61) // ±35°
+      d.yaw = THREE.MathUtils.clamp(d.yaw + (e.clientX - d.x) * 0.004, -0.61, 0.61) // ±35°
       d.pitch = THREE.MathUtils.clamp(d.pitch + (e.clientY - d.y) * 0.004, -0.26, 0.26) // ±15°
       d.x = e.clientX; d.y = e.clientY
     }
@@ -261,7 +263,8 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallScene
     el.addEventListener('pointerdown', down)
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
-    return () => { el.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointercancel', up); el.addEventListener('lostpointercapture', up) // fix11: touch scroll (pan-y) cancels the pointer; without this the drag stuck "active"
+    return () => { el.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); el.removeEventListener('lostpointercapture', up) }
   }, [gl])
 
   useFrame((_, dt) => {
@@ -277,6 +280,7 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallScene
     dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), d.yaw)
     dir.y += d.pitch * dir.length()
     camera.lookAt(camera.position.clone().add(dir))
+    ;(window as Window & { __lumenDrag?: { yaw: number; pitch: number; dx: number; dy: number } }).__lumenDrag = { yaw: d.yaw, pitch: d.pitch, dx: dir.x, dy: dir.y } // QA hook
   })
   return null
 }
@@ -367,7 +371,7 @@ export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; 
         scene.fog = new THREE.Fog('#0B0B0F', 18, 40)
         gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); p.onContextLost() })
       }}
-      style={{ touchAction: 'pan-y' }}
+      style={{ touchAction: 'none' }} // fix11: was pan-y, so a vertical finger drag scrolled the page instead of tilting; page still scrolls outside the canvas / in simple view
     >
       {!low && <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(maxDpr)} />}
       {p.fpsGuard && stage < 2 && <FpsGuard key={stage} forceSlow={p.fpsForceSlow} onSlow={() => { if (stage === 0) setStage(1); else { setStage(2); p.onStillSlow?.() } }} />}
