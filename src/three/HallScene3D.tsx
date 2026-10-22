@@ -9,6 +9,7 @@ import { PerformanceMonitor } from '@react-three/drei'
 import * as THREE from 'three'
 import { makeHallLooks, rowGlow, type HallLooks } from './hallLooks'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import type { Hall, Seat } from '@/lib/api'
 
 export type HallSceneProps = {
@@ -64,16 +65,36 @@ function eye(p: THREE.Vector3, phone = false) {
   return { pos: new THREE.Vector3(p.x, p.y + 1.15, p.z + 0.05), look: new THREE.Vector3(0, SCREEN.y - 0.9, SCREEN.z) }
 }
 
-const TAKEN = new THREE.Color('#3A2A2E')
+// fix14 §15.v seat style A (classic red velvet): flat PBR colours, no new textures
+const FABRIC = new THREE.Color('#8E1B24'), ACCESS = new THREE.Color('#3B82F6')
+const TAKEN = new THREE.Color('#4A2A2D')
+const WOOD = '#3B2416', BRASS = '#C9A24A'
+/** walnut side panels, seat-local */
+function woodGeometry() {
+  return mergeGeometries([-1, 1].map((sx) => new THREE.BoxGeometry(0.05, 0.5, 0.56).translate(sx * 0.28, 0.27, 0.02)))!
+}
+/** brass caps on the front of both armrests */
+function brassGeometry() {
+  return mergeGeometries([-1, 1].map((sx) => new THREE.BoxGeometry(0.065, 0.03, 0.1).translate(sx * 0.28, 0.535, -0.2)))!
+}
+/** wheelchair icon decal (geometry, no texture) on the back's rear face, seen from the rows behind */
+function wheelchairGeometry() {
+  const wheel = new THREE.TorusGeometry(0.075, 0.016, 6, 20).translate(0.01, -0.06, 0)
+  const head = new THREE.CircleGeometry(0.025, 12).translate(-0.02, 0.12, 0)
+  const body = new THREE.PlaneGeometry(0.03, 0.12).translate(-0.02, 0.03, 0)
+  const leg = new THREE.PlaneGeometry(0.09, 0.03).translate(0.02, -0.03, 0)
+  const g = mergeGeometries([wheel, head, body, leg].map((x) => x.toNonIndexed()))!
+  return g.rotateY(Math.PI).rotateX(-0.12).translate(0, 0.72, 0.32)
+}
 /** §15 gold edge: back top rail + back sides + both arms, seat-local (seat origin = row floor). Body stays velvet. */
 function edgeGeometry(grow: number, thin = false) {
   // fix9 desktop (thin): seen from above the 5cm rail + glow read as a solid gold top. Thin = 2.5cm rail on the back's rear top edge
   // (velvet stays visible in front of it) and thinner sides/arms.
   const r = thin ? 0.025 : 0.05
   const parts = [
-    thin ? [0.52, r, r, 0, 1.01, 0.3] : [0.54, 0.05, 0.05, 0, 1.03, 0.22],
+    thin ? [0.48, r, r, 0, 1.03, 0.3] : [0.5, 0.05, 0.05, 0, 1.05, 0.22],
     [r, 0.62, r, -0.27, 0.72, 0.29], [r, 0.62, r, 0.27, 0.72, 0.29],
-    [r, r, 0.5, -0.28, 0.5, 0.02], [r, r, 0.5, 0.28, 0.5, 0.02],
+    [r, r, 0.5, -0.28, 0.54, 0.02], [r, r, 0.5, 0.28, 0.54, 0.02],
   ].map(([w, h, d, x, y, z]) => new THREE.BoxGeometry(w * (w < 0.1 ? grow : 1), h * (h < 0.1 ? grow : 1), d * (d < 0.1 ? grow : 1)).translate(x, y, z))
   return mergeGeometries(parts)!
 }
@@ -89,12 +110,16 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
   const edgeMat = useRef<THREE.MeshBasicMaterial>(null), glowMat = useRef<THREE.MeshBasicMaterial>(null)
   const velvet = useRef<THREE.MeshPhysicalMaterial>(null)
   const geo = useMemo(() => {
-    const cushion = new THREE.BoxGeometry(0.5, 0.18, 0.5).translate(0, 0.35, 0)
-    const back = new THREE.BoxGeometry(0.5, 0.6, 0.12).rotateX(-0.12).translate(0, 0.7, 0.25)
+    // fix14 §15.v: bevelled cushion + rounded back (fabric parts; still the only raycast targets).
+    // The back keeps the fix13 silhouette height: a taller back hid the front-row centre seats (A7–A10) from the overview camera and broke the hit test.
+    const cushion = new RoundedBoxGeometry(0.5, 0.18, 0.5, 2, 0.05).translate(0, 0.35, 0)
+    const back = new RoundedBoxGeometry(0.5, 0.62, 0.12, 3, 0.055).rotateX(-0.12).translate(0, 0.71, 0.25)
     const g = mergeGeometries([cushion, back])!
     cushion.dispose(); back.dispose()
     return g
   }, [])
+  const woodGeo = useMemo(woodGeometry, []), brassGeo = useMemo(brassGeometry, []), chairGeo = useMemo(wheelchairGeometry, [])
+  const wood = useRef<THREE.InstancedMesh>(null), brass = useRef<THREE.InstancedMesh>(null), chair = useRef<THREE.InstancedMesh>(null)
   const edgeGeo = useMemo(() => edgeGeometry(1, !phone), [phone]), glowGeo = useMemo(() => edgeGeometry(phone ? 2.6 : 1.8, !phone), [phone])
   const tmp = useMemo(() => new THREE.Object3D(), [])
   const MAXSEL = 8
@@ -104,11 +129,20 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
     open.forEach(({ seat, pos }, i) => {
       const sel = selected.includes(seat.id)
       tmp.position.set(pos.x, pos.y + (sel ? 0.08 : 0), pos.z); tmp.updateMatrix(); m.setMatrixAt(i, tmp.matrix)
-      m.setColorAt(i, seat.type === 'access' ? C.access : hovered?.id === seat.id && !sel ? C.hover : C.free)
+      m.setColorAt(i, seat.type === 'access' ? ACCESS : FABRIC) // fix14: hover = 30% rim only, no fabric tint
     })
     m.count = open.length
     shut.forEach(({ pos }, i) => { tmp.position.set(pos.x, pos.y, pos.z); tmp.updateMatrix(); t.setMatrixAt(i, tmp.matrix) })
     t.count = shut.length
+    // fix14: walnut panels + brass caps on every seat (lift with a selected seat); wheelchair decal on free access seats
+    items.forEach(({ seat, pos }, i) => {
+      tmp.position.set(pos.x, pos.y + (selected.includes(seat.id) && !taken.has(seat.id) ? 0.08 : 0), pos.z); tmp.updateMatrix()
+      wood.current!.setMatrixAt(i, tmp.matrix); brass.current!.setMatrixAt(i, tmp.matrix)
+    })
+    const acc = open.filter((i) => i.seat.type === 'access')
+    acc.forEach(({ seat, pos }, i) => { tmp.position.set(pos.x, pos.y + (selected.includes(seat.id) ? 0.08 : 0), pos.z); tmp.updateMatrix(); chair.current!.setMatrixAt(i, tmp.matrix) })
+    chair.current!.count = acc.length
+    for (const x of [wood.current!, brass.current!, chair.current!]) { x.instanceMatrix.needsUpdate = true; x.computeBoundingSphere() }
     for (const x of [m, t]) { x.instanceMatrix.needsUpdate = true; if (x.instanceColor) x.instanceColor.needsUpdate = true; x.computeBoundingSphere() }
     const sel = open.filter((i) => selected.includes(i.seat.id)).slice(0, MAXSEL)
     for (const e of [edge.current!, glow.current!]) {
@@ -176,10 +210,19 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
   return (
     <>
       <instancedMesh ref={mesh} args={[geo, undefined, items.length]} {...ev(open)}>
-        <meshPhysicalMaterial ref={velvet} roughness={0.8} sheen={0.7} sheenRoughness={0.45} sheenColor="#ff8a98" normalMap={looks.normal} normalScale={new THREE.Vector2(0.8, 0.8)} />
+        <meshPhysicalMaterial ref={velvet} roughness={0.9} sheen={0.7} sheenRoughness={0.45} sheenColor="#ff8a98" normalMap={looks.normal} normalScale={new THREE.Vector2(0.8, 0.8)} />
       </instancedMesh>
       <instancedMesh ref={takenMesh} args={[geo, undefined, items.length]} {...ev(shut)}>
         <meshStandardMaterial color={TAKEN} roughness={0.95} />
+      </instancedMesh>
+      <instancedMesh ref={wood} args={[woodGeo, undefined, items.length]} raycast={noRay}>
+        <meshStandardMaterial color={WOOD} roughness={0.6} />
+      </instancedMesh>
+      <instancedMesh ref={brass} args={[brassGeo, undefined, items.length]} raycast={noRay}>
+        <meshStandardMaterial color={BRASS} metalness={0.8} roughness={0.35} />
+      </instancedMesh>
+      <instancedMesh ref={chair} args={[chairGeo, undefined, items.length]} raycast={noRay}>
+        <meshBasicMaterial color="#ffffff" side={THREE.DoubleSide} toneMapped={false} />
       </instancedMesh>
       <instancedMesh ref={edge} args={[edgeGeo, undefined, MAXSEL]} raycast={noRay}>
         <meshBasicMaterial ref={edgeMat} color="#F2B544" transparent toneMapped={false} />
@@ -187,9 +230,9 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
       <instancedMesh ref={glow} args={[glowGeo, undefined, MAXSEL]} raycast={noRay}>
         <meshBasicMaterial ref={glowMat} color="#F2B544" transparent opacity={0.22} blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </instancedMesh>
-      {/* desktop hover: faint gold rim at 40% */}
+      {/* desktop hover: gold rim at 30% (§15.v) */}
       <instancedMesh ref={hoverEdge} args={[edgeGeo, undefined, 1]} raycast={noRay}>
-        <meshBasicMaterial color="#F2B544" transparent opacity={0.4} toneMapped={false} />
+        <meshBasicMaterial color="#F2B544" transparent opacity={0.3} toneMapped={false} />
       </instancedMesh>
       {/* fix12 §15.z: 3D preview outline, accent at 60%, no fill */}
       <instancedMesh ref={previewEdge} args={[edgeGeo, undefined, 1]} raycast={noRay}>
