@@ -7,6 +7,7 @@ body { font-family: Inter, system-ui, sans-serif; -webkit-font-smoothing: antial
 
 /* §12 velvet option B: 7 KB tile + CSS lighting. #7A1F2B fallback so the curtain never flashes untextured. */
 .velvet-tex{background:#7A1F2B url(/velvet-tile.webp) repeat;background-size:176px 176px;}
+.no3d #seat-static .velvet-tex{background-image:none}/* fix10: simple-view visits never fetch the tile */
 .velvet-tex::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(120% 70% at 50% -10%,rgba(255,200,150,.22),transparent 55%),linear-gradient(180deg,transparent 40%,rgba(0,0,0,.55)),radial-gradient(80% 60% at 50% 30%,transparent,rgba(0,0,0,.45));}
 .curtain{transition:transform 900ms cubic-bezier(0.65,0,0.35,1),opacity 300ms ease;will-change:transform;}
 @media (prefers-reduced-motion: reduce){.curtain{transition:opacity 300ms ease;}}

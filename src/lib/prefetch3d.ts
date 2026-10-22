@@ -36,8 +36,17 @@ export function prefetchHall3D() {
       document.head.appendChild(img)
     }
   }
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (w.requestIdleCallback) w.requestIdleCallback(go, { timeout: 1500 })
-    else setTimeout(go, 1200)
-  }))
+  // fix10: start only after LCP has painted (r9: the idle prefetch began 20-70 ms before the synopsis LCP and split movie LCP
+  // 2.4/3.8 s). Wait ~1 s after the latest LCP entry, then idle. Fallback (no LCP observer support): load event + idle.
+  const idle = () => (w.requestIdleCallback ? w.requestIdleCallback(go, { timeout: 1500 }) : setTimeout(go, 200))
+  let fired = false, t: ReturnType<typeof setTimeout> | undefined
+  const fire = () => { if (fired) return; fired = true; po?.disconnect(); performance.mark('lumen:prefetch3d-start'); idle() }
+  let po: PerformanceObserver | undefined
+  if (PerformanceObserver.supportedEntryTypes?.includes('largest-contentful-paint')) {
+    po = new PerformanceObserver(() => { clearTimeout(t); t = setTimeout(fire, 1000) })
+    po.observe({ type: 'largest-contentful-paint', buffered: true })
+    // LCP stops reporting on input; if nothing new arrives the 1 s timer above still fires. Hard cap for safety:
+    setTimeout(() => { if (!t) fire() }, 6000)
+  } else if (document.readyState === 'complete') fire()
+  else addEventListener('load', fire, { once: true })
 }

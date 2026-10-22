@@ -15,8 +15,10 @@ atlas = np.zeros((512, W, 3))
 # floor (fix9): soft warm spill from the screen, #F2B544 at ~14% fading to black over ~2 rows (screen z=0, rows start z=5, 1.05 deep)
 y = np.arange(256)[:, None, None]; z = -7 + 30 * y / 256
 u = np.linspace(0, 1, W)[None, :, None]
-k = 0.14 * (1 - ss(0.0, 7.5, z)) * (1 - 0.35 * np.abs(u - 0.5) * 2)  # strongest centre-front, softer at the side walls
-atlas[0:256] = BG + (WARM - BG) * k + 0 * u
+k = 0.17 * (1 - ss(0.0, 7.5, z)) * (1 - 0.35 * np.abs(u - 0.5) * 2)  # strongest centre-front, softer at the side walls
+# fix10: pure #F2B544 over the cool black read olive; tint it warmer with ~30% of the seat velvet #7A1F2B
+SPILL = WARM * 0.7 + hexc('#7A1F2B') * 0.3 # k 0.14 -> 0.17 keeps the fix9 brightness after the redder tint
+atlas[0:256] = BG + (SPILL - BG) * k + 0 * u
 # riser AO (white = unshadowed; multiplied by the per-row colour in the material)
 v = np.arange(128)[:, None] / 127
 def interp(x, xs, ys): return np.interp(x, xs, ys)
@@ -28,7 +30,9 @@ atlas[256:384] = ((1 - ao) * (1 - side))[..., None]
 uw = np.linspace(0, 1, W)[None, :, None]; vy = np.linspace(0, 1, 64)[:, None, None]
 proto = np.interp(uw, [0, .12, .4, 1], [1, .67, 0, 0])
 for row, col in ((384, WARM), (448, COOL)):
-  k = 0.55 * 0.6 * proto * (0.75 + 0.25 * vy)
+  # fix10: vertical falloff so the glow fades out toward ceiling and floor (no hard wedge edges)
+  vf = ss(0.0, 0.3, vy) * (1 - ss(0.7, 1.0, vy))
+  k = 0.55 * 0.6 * proto * vf
   atlas[row:row + 64] = BG + (col - BG) * k
 Image.fromarray((np.clip(atlas, 0, 1) * 255 + .5).astype(np.uint8)).save('public/hall/hall-light.webp', quality=88, method=6)
 # fabric normal (prototype weave + noise)
