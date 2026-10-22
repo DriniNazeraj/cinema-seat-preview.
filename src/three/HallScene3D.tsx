@@ -229,25 +229,55 @@ function CameraRig({ hall, focusSeat, resetKey, instant }: Pick<HallSceneProps, 
   return null
 }
 
-export default function HallScene3D(p: HallSceneProps) {
+/** fix5: real readiness for the curtain loader = scene has rendered 2 frames (shaders compiled). */
+function FirstFrame({ onReady }: { onReady?: () => void }) {
+  const n = useRef(0)
+  useFrame(() => { if (++n.current === 2) onReady?.() })
+  return null
+}
+
+/** §14 slow-device net: report each continuous 2s stretch under 30fps. */
+function FpsGuard({ onSlow, forceSlow }: { onSlow: () => void; forceSlow?: boolean }) {
+  const st = useRef({ frames: 0, t: 0, low: 0, fired: false })
+  useFrame((_, dt) => {
+    const s = st.current
+    if (s.fired) return
+    s.frames++; s.t += dt
+    if (s.t < 0.5) return
+    const fps = forceSlow ? 0 : s.frames / s.t
+    s.low = fps < 30 ? s.low + s.t : 0
+    s.frames = 0; s.t = 0
+    if (s.low >= 2) { s.fired = true; onSlow() }
+  })
+  return null
+}
+
+export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; fpsGuard?: boolean; fpsForceSlow?: boolean; onStillSlow?: () => void }) {
   const maxDpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2)
   const [dpr, setDpr] = useState(maxDpr)
+  // stage 0: full quality; 1: DPR 1 + no antialias/shadows (Canvas remounts, a GL context can't drop MSAA live); 2: told parent
+  const [stage, setStage] = useState(0)
+  const low = stage > 0
+  const swapping = useRef(false) // old canvas loses its context on the quality-drop remount; not a real loss
   return (
     <Canvas
-      dpr={dpr}
+      key={low ? 'low' : 'full'}
+      dpr={low ? 1 : dpr}
       camera={{ fov: 55, near: 0.1, far: 80 }}
-      gl={{ antialias: !p.phone, powerPreference: 'high-performance' }}
+      gl={{ antialias: !p.phone && !low, powerPreference: 'high-performance' }}
       shadows={false}
       onCreated={({ gl, scene }) => {
         scene.background = new THREE.Color('#0B0B0F')
         scene.fog = new THREE.Fog('#0B0B0F', 18, 40)
-        gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); p.onContextLost() })
+        gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); if (!swapping.current) p.onContextLost() })
       }}
       style={{ touchAction: 'pan-y' }}
     >
       <PerformanceMonitor onDecline={() => setDpr(1)} onIncline={() => setDpr(maxDpr)} />
+      {p.fpsGuard && stage < 2 && <FpsGuard key={stage} forceSlow={p.fpsForceSlow} onSlow={() => { if (stage === 0) { swapping.current = true; setTimeout(() => { swapping.current = false }, 1500); setStage(1) } else { setStage(2); p.onStillSlow?.() } }} />}
       <Room hall={p.hall} />
       <Seats {...p} />
+      <FirstFrame onReady={p.onReady} />
       <CameraRig hall={p.hall} focusSeat={p.focusSeat} resetKey={p.resetKey} instant={p.instant} />
     </Canvas>
   )

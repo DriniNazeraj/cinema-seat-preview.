@@ -25,5 +25,5 @@ export default defineConfig({
   plugins: [react(), prerenderedPreview()],
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   preview: { host: '0.0.0.0', port: 4174 },
-  build: { chunkSizeWarningLimit: 1200 },
+  build: { chunkSizeWarningLimit: 1200, manifest: true },
 })

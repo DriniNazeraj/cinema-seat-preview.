@@ -1,13 +1,16 @@
-import { lazy, Suspense, useEffect, useMemo, useState, Component, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, Component, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Box, Eye, RotateCcw } from 'lucide-react'
+import { ArrowLeft, Box, Eye, RotateCcw } from 'lucide-react'
 import { getMovie, getSeatMap, listShows, MAX_SEATS, type Seat } from '@/lib/api'
 import { useData } from '@/lib/useData'
 import { useBooking } from '@/lib/booking'
 import { decideThree, isPhone, type ThreeDecision } from '@/lib/device'
+import { isHall3DReady } from '@/lib/prefetch3d'
 import { cn, dayLabel, eur, prefersReducedMotion, time } from '@/lib/format'
-import { Button, Card, Container, ErrorCard, Skeleton } from '@/components/ui'
+import { Button, Container, ErrorCard, Skeleton } from '@/components/ui'
+import { Curtains, type CurtainPhase } from '@/components/Curtains'
+import { SeatSheet } from '@/components/SeatSheet'
 import { SeatLegend, SeatMap2D } from '@/components/SeatMap2D'
 import { StepIndicator } from '@/components/Shows'
 import { ViewFromSeatCard } from '@/components/ViewFromSeatCard'
@@ -43,7 +46,14 @@ export default function SeatsPage() {
   const [shake, setShake] = useState<string | null>(null)
   const [limitMsg, setLimitMsg] = useState(false)
   const [resetKey, setResetKey] = useState(0)
-  const [collapsed, setCollapsed] = useState(false)
+  const [curtain, setCurtain] = useState<CurtainPhase>('closed')
+  const [progress, setProgress] = useState(0)
+  // §14 fps guard: ?3d=1 or ?nofps=1 turn it off; ?fps=slow forces it on and simulates <30fps (QA for the toast)
+  const fpsSlow = q.get('fps') === 'slow'
+  const fpsGuard = fpsSlow || (q.get('3d') !== '1' && q.get('nofps') !== '1')
+  const [quick, setQuick] = useState(false) // chunk prefetched: no progress line, closed 150ms then open
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const peekRef = useRef<HTMLButtonElement>(null)
 
   // No ?show= in the URL (e.g. a shared/bookmarked /movie/:id/seats link): pick the next bookable show
   // instead of dead-ending, keeping other params such as ?3d=1.
@@ -65,7 +75,22 @@ export default function SeatsPage() {
     const d = decideThree()
     setDecision(d)
     setThreeOn(d.mode === 'auto')
+    // §10: skip curtains when 3D won't run, or if already shown this session; fallback opens the sheet at once.
+    if (d.mode !== 'auto' || sessionStorage.getItem('lumen.curtain') === '1') { setCurtain('gone'); setSheetOpen(true) }
+    else { sessionStorage.setItem('lumen.curtain', '1'); if (isHall3DReady()) setQuick(true) }
   }, [])
+  // progress 0->85% indeterminate, 100% on ready; open on 3D ready, context loss, or the 2.5s cap.
+  useEffect(() => {
+    if (curtain !== 'closed') return
+    if (quick) { const q = setTimeout(() => { setProgress(100); setCurtain('opening') }, 150); return () => clearTimeout(q) }
+    // CSS-driven (no rAF loop) so requestIdleCallback can fire and the 3D mounts early
+    const r = requestAnimationFrame(() => setProgress(85))
+    const cap = setTimeout(() => setCurtain('opening'), 2500)
+    return () => { cancelAnimationFrame(r); clearTimeout(cap) }
+  }, [curtain, quick])
+  useEffect(() => { if (curtain === 'closed' && (threeReady || lostNote)) { setProgress(100); setCurtain('opening') } }, [threeReady, lostNote, curtain])
+  useEffect(() => { if (curtain === 'opening') performance.mark('lumen:curtain-open') }, [curtain])
+  useEffect(() => { if (!sheetOpen && curtain === 'gone') peekRef.current?.focus({ preventScroll: true }) }, [sheetOpen, curtain])
   useEffect(() => { if (movie.data) document.title = `Choose seats · ${movie.data.title} [PH] | Lumen Cinema [PH]` }, [movie.data])
 
   const mapReady = !!map.data
@@ -105,6 +130,8 @@ export default function SeatsPage() {
     if (selected.length >= MAX_SEATS) { setLimitMsg(true); return }
     booking.toggleSeat(seat.id)
     setFocusSeat(seat)
+    // §11.4: in 3D the sheet collapses to the peek bar so the camera fly is visible. Fallback keeps it open.
+    if (threeOn && threeReady && !lostNote) setSheetOpen(false)
   }
 
   if (!showId) return (
@@ -120,100 +147,113 @@ export default function SeatsPage() {
   const fallback = !threeOn || !!lostNote
   const total = selected.length * price
 
-  const view = (
-    <div className={cn('relative overflow-hidden rounded-xl bg-surface ring-1 ring-border', 'aspect-video max-h-[40svh] w-full lg:aspect-[16/10] lg:max-h-none', collapsed && 'hidden lg:block')}>
-      {map.data && fallback && (
-        <div className="absolute inset-0">
-          <ViewFromSeatCard seat={lastSelected} hall={map.data.hall} note={lostNote ?? (decision?.mode === 'off' ? decision.reason : undefined)} />
-          {decision?.mode === 'on-demand' && !threeOn && (
-            <Button className="absolute right-3 top-3" onClick={() => setThreeOn(true)}><Box className="size-4" /> Preview in 3D</Button>
-          )}
-        </div>
-      )}
-      {map.data && threeOn && idle && !lostNote && (
-        <div className={cn('absolute inset-0 transition-opacity duration-500', threeReady ? 'opacity-100' : 'opacity-0')}>
-          <GLBoundary onError={() => setLostNote('3D view unavailable, showing simple view')}>
-            <Suspense fallback={null}>
-              <ThreeMount onReady={() => setThreeReady(true)}>
-                <HallScene3D hall={map.data.hall} taken={taken} selected={selected} focusSeat={focusSeat} hovered={hovered}
-                  onPick={pick} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
-                  onContextLost={() => setLostNote('3D view paused, showing simple view')} />
-              </ThreeMount>
-            </Suspense>
-          </GLBoundary>
-        </div>
-      )}
-      {threeOn && !threeReady && !lostNote && (
-        <div className="absolute inset-0 grid place-items-center"><Skeleton className="absolute inset-0 rounded-none" /><p className="relative text-sm text-text-muted">Loading the hall…</p></div>
-      )}
-      {threeOn && threeReady && !lostNote && (
-        <>
-          <button onClick={() => { setFocusSeat(null); setResetKey((k) => k + 1) }} aria-label="Reset view" className="absolute right-3 top-3 inline-flex size-9 items-center justify-center gap-1 rounded-full bg-bg/80 text-xs ring-1 ring-border hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent md:size-auto md:min-h-9 md:px-3">
-            <RotateCcw className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Reset view</span>
-          </button>
-          <p data-view={focusSeat?.id ?? "overview"} className="absolute bottom-3 left-3 rounded-full bg-bg/80 px-3 py-1 text-xs ring-1 ring-border" aria-live="polite">
-            {focusSeat ? `View from Row ${focusSeat.row}, Seat ${focusSeat.n}` : 'Overview · drag to look around'}
-          </p>
-        </>
-      )}
-      {threeOn && !lostNote && (
-        <button onClick={() => { localStorage.setItem('lumen.simple', '1'); setThreeOn(false) }} aria-label="Simple view" className="absolute bottom-3 right-3 inline-flex size-9 items-center justify-center gap-1 rounded-full bg-bg/80 text-xs ring-1 ring-border hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent md:size-auto md:min-h-9 md:px-3">
-          <Eye className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Simple view</span>
-        </button>
-      )}
-    </div>
-  )
+  function slowToast() {
+    if (sessionStorage.getItem('lumen.slowtoast') === '1') return
+    sessionStorage.setItem('lumen.slowtoast', '1')
+    toast('Running slow? Switch to simple view', {
+      position: 'bottom-center', className: 'mb-16', duration: Infinity, closeButton: true,
+      action: { label: 'Switch', onClick: () => { localStorage.setItem('lumen.simple', '1'); setThreeOn(false) } },
+    })
+  }
+  const seatLabel = selected.length ? selected.join(', ') : 'No seats yet'
+  const goBook = () => { booking.startHold(); nav('/booking') }
+  const showLine = show ? `${dayLabel(show.start)} · ${time(show.start)} · ${show.format} · ${map.data?.hall.name}` : '\u00a0'
+  const curtainsUp = curtain !== 'gone'
+  const titleText = <>{movie.data?.title ?? '…'} <span className="text-base text-text-muted">[PH]</span></>
+  const iconBtn = 'inline-flex size-11 items-center justify-center gap-1 rounded-full bg-bg/70 text-xs ring-1 ring-border hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent md:w-auto md:px-3'
 
   return (
-    <div className="min-h-[115svh] pb-28 lg:pb-12">
-      <div className="sticky top-16 z-30 border-b border-border bg-bg/90 backdrop-blur">
-        <Container className="flex h-12 items-center overflow-x-auto"><StepIndicator step={1} /></Container>
-      </div>
-      <Container className="pt-6">
-        <div className="mb-4">
-          <Link to={`/movie/${id}`} className="text-sm text-text-muted hover:text-text">← Back to showtimes</Link>
-          <h1 className="min-h-10 font-display text-4xl uppercase md:min-h-12 tracking-wide md:text-5xl">{movie.data?.title ?? '…'} <span className="text-base text-text-muted">[PH]</span></h1>
-          <p className="min-h-5 text-sm text-text-muted">{show ? `${dayLabel(show.start)} · ${time(show.start)} · ${show.format} · ${map.data?.hall.name}` : '\u00a0'}</p>
-        </div>
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-          <div className="lg:sticky lg:top-32 lg:flex-1">
-            {view}
-            <button className="mt-2 text-xs text-text-muted underline lg:hidden" onClick={() => setCollapsed((c) => !c)}>{collapsed ? 'Show preview view' : 'Hide preview to make room'}</button>
+    <div className="fixed inset-0 z-40 h-[100svh] overflow-hidden bg-bg" aria-busy={threeOn && !threeReady && !lostNote}>
+      <p role="status" className="sr-only">{fallback ? 'Showing simple seat view' : threeReady ? '3D preview ready' : 'Loading the 3D seat preview'}</p>
+      {/* hall layer: 3D canvas, or the static view-from-seat card (fallback) */}
+      <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_0%,#2a0d12,#0B0B0F_70%)]">
+        {map.data && fallback && (
+          <div className="absolute inset-0 grid place-items-center p-4 pb-20 pt-16 md:pr-[432px]">
+            <div className="w-full max-w-3xl"><ViewFromSeatCard seat={lastSelected} hall={map.data.hall} note={lostNote ?? (decision?.mode === 'off' ? decision.reason : undefined)} /></div>
           </div>
-          <Card className="min-h-[580px] p-4 lg:min-h-[528px] lg:w-[440px]">
-            {!map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-10 sm:h-6" />)}</div> : (
-              <>
-                <SeatMap2D hall={map.data.hall} taken={taken} selected={selected} price={price} onPick={pick} onHover={setHovered} shakeId={shake} compact={false} />
-                <div className="mt-4"><SeatLegend /></div>
-                {soldOut && (
-                  <div className="mt-4 rounded-xl bg-surface-2 p-4 text-sm">This show is sold out. <Link to={`/movie/${id}`} className="ml-1 text-accent underline">Try another time</Link></div>
-                )}
-                {limitMsg && <p className="mt-3 text-sm text-danger" role="alert">You can book up to {MAX_SEATS} seats at once.</p>}
-                {accessPicked && <p className="mt-3 rounded-xl bg-access/15 p-3 text-sm text-text">Wheelchair space — companion seat next to it is free [PH]</p>}
-                <div className="mt-4 hidden border-t border-border pt-4 lg:block">
-                  <p className="text-sm text-text-muted">Your seats</p>
-                  <div className="mt-2 flex min-h-8 flex-wrap gap-2">
-                    {selected.length ? selected.map((s) => <span key={s} className="rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-fg">{s}</span>) : <span className="text-sm text-text-muted">None yet</span>}
-                  </div>
-                  <div className="mt-4 flex items-center justify-between"><span className="text-text-muted">Total</span><span className="text-xl font-semibold">{eur(total)} <span className="text-xs text-text-muted">[PH]</span></span></div>
-                  <Button className="mt-4 w-full" disabled={!selected.length} onClick={() => { booking.startHold(); nav('/booking') }}>Continue</Button>
-                </div>
-              </>
-            )}
-          </Card>
-        </div>
-      </Container>
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface/95 backdrop-blur lg:hidden">
-        <Container className="flex items-center justify-between gap-3 py-3">
-          <p className="text-sm"><span className="font-semibold">{selected.length} seat{selected.length === 1 ? '' : 's'}</span> · {eur(total)} [PH]{selected.length > 0 && <span className="block text-xs text-text-muted">{selected.join(', ')}</span>}</p>
-          <Button disabled={!selected.length} onClick={() => { booking.startHold(); nav('/booking') }}>Continue</Button>
-        </Container>
+        )}
+        {map.data && threeOn && idle && !lostNote && (
+          <div className={cn('absolute inset-0 transition-opacity duration-500', threeReady ? 'opacity-100' : 'opacity-0')}>
+            <GLBoundary onError={() => setLostNote('3D view unavailable, showing simple view')}>
+              <Suspense fallback={null}>
+                                  <HallScene3D hall={map.data.hall} taken={taken} selected={selected} focusSeat={focusSeat} hovered={hovered}
+                    onPick={pick} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
+                    onContextLost={() => setLostNote('3D view paused, showing simple view')}
+                  fpsGuard={fpsGuard} fpsForceSlow={fpsSlow} onStillSlow={slowToast}
+                  onReady={() => { performance.mark('lumen:hall-ready'); setThreeReady(true) }} />
+              </Suspense>
+            </GLBoundary>
+          </div>
+        )}
+        {threeOn && threeReady && !lostNote && (
+          <p data-view={focusSeat?.id ?? 'overview'} className="absolute bottom-20 left-3 rounded-full bg-bg/80 px-3 py-1 text-xs ring-1 ring-border md:bottom-4" aria-live="polite">
+            {focusSeat ? `View from Row ${focusSeat.row}, Seat ${focusSeat.n}` : 'Overview · drag to look around'}
+          </p>
+        )}
       </div>
+
+      {/* top bar (after curtains) */}
+      <div className={cn('absolute inset-x-0 top-0 z-[45] flex h-14 items-center gap-2 bg-gradient-to-b from-black/70 px-3 transition-opacity duration-200', curtainsUp ? 'opacity-0' : 'opacity-100')}>
+        <Link to={`/movie/${id}`} aria-label="Back to showtimes" className={iconBtn}><ArrowLeft className="size-4" aria-hidden /></Link>
+        <div className="min-w-0 flex-1">
+          {!curtainsUp && <h1 className="truncate font-display text-xl uppercase leading-tight tracking-wide md:text-2xl">{titleText}</h1>}
+          <p className="truncate text-xs text-text-muted">{showLine}</p>
+        </div>
+        {threeOn && threeReady && !lostNote && (
+          <button onClick={() => { setFocusSeat(null); setResetKey((k) => k + 1) }} aria-label="Reset view" className={iconBtn}>
+            <RotateCcw className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Reset view</span>
+          </button>
+        )}
+        {threeOn && !lostNote && (
+          <button onClick={() => { localStorage.setItem('lumen.simple', '1'); setThreeOn(false) }} aria-label="Simple view" className={iconBtn}>
+            <Eye className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Simple view</span>
+          </button>
+        )}
+        {decision?.mode === 'on-demand' && !threeOn && (
+          <button onClick={() => setThreeOn(true)} aria-label="Preview in 3D" className={iconBtn}><Box className="size-4" aria-hidden /> <span className="hidden md:inline">Preview in 3D</span></button>
+        )}
+      </div>
+
+      {curtainsUp && <Curtains phase={curtain} progress={progress} hideLine={quick} onGone={() => { performance.mark('lumen:curtain-gone'); setCurtain('gone'); setTimeout(() => setSheetOpen(true), 200) }} />}
+      {/* real-text overlay above the curtains (z-60): LCP is text, never the canvas */}
+      {curtainsUp && (
+        <div className={cn('fixed inset-0 z-[60] grid place-items-center p-6 text-center transition-opacity duration-200', curtain === 'opening' && 'pointer-events-none opacity-0')}>
+          <div>
+            <p className="font-display text-4xl tracking-[0.2em] text-[#F4F1EA] md:text-6xl">LUMEN<span className="ml-1 align-top font-sans text-[10px] tracking-normal text-text-muted">[PH]</span></p>
+            <h1 className="mt-4 min-h-10 font-display text-4xl uppercase tracking-wide md:text-5xl">{titleText}</h1>
+            <p className="min-h-5 text-sm text-[#F4F1EA]/80">{showLine}</p>
+            <p className="mt-2 text-sm text-text-muted">Setting up the hall…</p>
+            <Button className="mt-5 min-h-11" onClick={() => setCurtain('opening')}>Choose seats</Button>
+          </div>
+        </div>
+      )}
+
+      <SeatSheet open={sheetOpen && !curtainsUp} onCollapse={() => setSheetOpen(false)} title="Choose your seats" footer={
+        <div className="flex items-center justify-between gap-3">
+          <p className="min-w-0 truncate text-sm"><span className="font-semibold">{selected.length} seat{selected.length === 1 ? '' : 's'}</span> · {eur(total)} [PH]{selected.length > 0 && <span className="block truncate text-xs text-text-muted">{seatLabel}</span>}</p>
+          <Button className="min-h-11" disabled={!selected.length} onClick={goBook}>Continue</Button>
+        </div>
+      }>
+        {!map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-10 sm:h-6" />)}</div> : (
+          <>
+            <SeatMap2D hall={map.data.hall} taken={taken} selected={selected} price={price} onPick={pick} onHover={setHovered} shakeId={shake} compact={false} />
+            <div className="mt-4"><SeatLegend /></div>
+            {soldOut && <div className="mt-4 rounded-xl bg-surface-2 p-4 text-sm">This show is sold out. <Link to={`/movie/${id}`} className="ml-1 text-accent underline">Try another time</Link></div>}
+            {limitMsg && <p className="mt-3 text-sm text-danger" role="alert">You can book up to {MAX_SEATS} seats at once.</p>}
+            {accessPicked && <p className="mt-3 rounded-xl bg-access/15 p-3 text-sm text-text">Wheelchair space — companion seat next to it is free [PH]</p>}
+          </>
+        )}
+      </SeatSheet>
+      {/* peek bar: sheet collapsed, never fully hidden. Reserved h-16, fixed bottom. */}
+      {!sheetOpen && !curtainsUp && (
+        <div className="fixed inset-x-0 bottom-0 z-[55] flex h-16 items-center gap-2 border-t border-border bg-surface/95 px-3 backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:w-[400px] md:rounded-2xl md:ring-1 md:ring-border">
+          <button ref={peekRef} onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 truncate text-left text-sm" aria-label={`Selected: ${seatLabel}. Open seat picker`}>
+            <span className="font-semibold">{seatLabel}</span> · {eur(total)} [PH]
+          </button>
+          <Button variant="ghost" className="min-h-11" onClick={() => setSheetOpen(true)}>Change seats</Button>
+          <Button className="min-h-11" disabled={!selected.length} onClick={goBook}>Continue</Button>
+        </div>
+      )}
     </div>
   )
-}
-
-function ThreeMount({ onReady, children }: { onReady: () => void; children: ReactNode }) {
-  useEffect(() => { const t = setTimeout(onReady, 150); return () => clearTimeout(t) }, [onReady])
-  return <>{children}</>
 }

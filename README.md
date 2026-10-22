@@ -29,3 +29,10 @@ No env vars are needed. Don't commit `.env*`.
 - All 6 films (titles, taglines, synopses, ratings, runtimes), generated SVG posters/backdrops, trailer dialog
 - Showtimes, formats (2D/3D/IMAX), halls, prices (€9/€12/€15), taken seats (seeded random), sold-out shows
 - Booking refs, wheelchair companion note, "view from seat" illustrations (stand-ins for 9 pre-rendered stills), 3D screen content (static "NOW PLAYING" texture, no trailer clip)
+
+## Seat page flags (fix5)
+- `?3d=1` force the 3D path (skips device checks); also disables the fps guard.
+- `?simple=1` simple view (no 3D, no curtains); the "Simple view" button / slow toast saves `localStorage lumen.simple=1`.
+- `?nofps=1` disable the §14 fps guard on any URL.
+- `?fps=slow` force the fps guard to act as if <30fps: quality drop (DPR 1, no AA) after 2s, then the one-time "Running slow?" toast after 2s more.
+- `/movie/:id?noprefetch=1` skip the idle 3D chunk prefetch (A/B measurement only).

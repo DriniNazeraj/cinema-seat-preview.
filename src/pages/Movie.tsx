@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { prefetchHall3D } from '@/lib/prefetch3d'
 import { useParams } from 'react-router-dom'
 import { Play } from 'lucide-react'
 import { Dialog, DialogContent, DialogTrigger } from '@/components/Dialog'
@@ -14,6 +15,8 @@ export default function MoviePage() {
   const movie = useData(`movie:${id}`, () => getMovie(id))
   const shows = useData(`shows:${id}`, () => listShows({ movieId: id }))
   const [trailer, setTrailer] = useState(false)
+  // §13 prefetch: warm the 3D chunk + velvet tile while the visitor picks a showtime (link prefetch only)
+  useEffect(() => { prefetchHall3D() }, [])
   useEffect(() => { if (typeof location !== 'undefined' && location.hash === '#trailer') setTrailer(true) }, [])
 
   if (movie.error) return <Container className="py-16"><ErrorCard onRetry={movie.retry} /></Container>
