@@ -12,6 +12,8 @@ export function hasWebGL(): boolean {
 export function decideThree(): ThreeDecision {
   if (typeof window === 'undefined') return { mode: 'off', reason: 'ssr' }
   const q = new URLSearchParams(location.search)
+  // ?3d=1 forces the 3D path (skips GPU/data-saver/memory checks), e.g. to measure the three chunk on software WebGL.
+  if (q.get('3d') === '1') return { mode: 'auto', reason: 'forced by ?3d=1' }
   if (q.get('simple') === '1' || localStorage.getItem('lumen.simple') === '1') return { mode: 'off', reason: 'Simple view is on' }
   if (!hasWebGL()) return { mode: 'off', reason: 'Your browser has 3D turned off' }
   const nav = navigator as Navigator & { connection?: { saveData?: boolean }; deviceMemory?: number }

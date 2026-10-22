@@ -19,7 +19,7 @@ export default function Home() {
 
   return (
     <>
-      <section className="relative flex min-h-[80svh] items-end overflow-hidden">
+      <section className="relative flex min-h-[80svh] md:min-h-[70svh] items-end overflow-hidden">
         <div className="absolute inset-0">{featured && <Poster movie={featured} wide />}</div>
         <div className="absolute inset-0 bg-gradient-to-t from-bg via-bg/60 to-transparent" />
         <Container className="relative pb-16 md:pb-24">
@@ -38,7 +38,7 @@ export default function Home() {
         </Container>
       </section>
 
-      <section className="py-16 md:py-24" aria-labelledby="now">
+      <section className="pb-16 pt-16 md:pb-24 md:pt-12" aria-labelledby="now">
         <Container>
           <div className="mb-6 flex items-end justify-between">
             <h2 id="now" className="font-display text-3xl uppercase tracking-wide md:text-4xl">Now showing</h2>

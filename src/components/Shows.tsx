@@ -55,8 +55,8 @@ export function StepIndicator({ step }: { step: 0 | 1 | 2 | 3 }) {
       {steps.map((s, i) => (
         <li key={s} className="flex items-center gap-2" aria-current={i === step ? 'step' : undefined}>
           <span className={cn('grid size-6 place-items-center rounded-full text-[11px] font-semibold', i < step ? 'bg-success text-bg' : i === step ? 'bg-accent text-accent-fg' : 'bg-surface-2 text-text-muted')}>{i + 1}</span>
-          <span className={i === step ? 'text-text' : 'text-text-muted'}>{s}</span>
-          {i < steps.length - 1 && <span className="h-px w-4 bg-border md:w-8" aria-hidden />}
+          <span className={i === step ? 'text-text' : 'sr-only text-text-muted sm:not-sr-only'}>{s}</span>
+          {i < steps.length - 1 && <span className="h-px w-3 bg-border sm:w-4 md:w-8" aria-hidden />}
         </li>
       ))}
     </ol>

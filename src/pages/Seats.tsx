@@ -63,7 +63,11 @@ export default function SeatsPage() {
     }
     if (selected.includes(seat.id)) {
       booking.toggleSeat(seat.id); setLimitMsg(false)
-      if (focusSeat?.id === seat.id) setFocusSeat(null)
+      // fly to the most recently selected seat that is still selected; overview only when none left
+      const remaining = selected.filter((id) => id !== seat.id)
+      const prev = remaining.length ? seatsById.get(remaining[remaining.length - 1]) ?? null : null
+      if (prev) setFocusSeat(prev)
+      else { setFocusSeat(null); setResetKey((k) => k + 1) }
       return
     }
     if (selected.length >= MAX_SEATS) { setLimitMsg(true); return }
@@ -108,17 +112,17 @@ export default function SeatsPage() {
       )}
       {threeOn && threeReady && !lostNote && (
         <>
-          <button onClick={() => { setFocusSeat(null); setResetKey((k) => k + 1) }} className="absolute right-3 top-3 inline-flex min-h-9 items-center gap-1 rounded-full bg-bg/80 px-3 text-xs ring-1 ring-border hover:bg-surface-2">
-            <RotateCcw className="size-3.5" /> Reset view
+          <button onClick={() => { setFocusSeat(null); setResetKey((k) => k + 1) }} aria-label="Reset view" className="absolute right-3 top-3 inline-flex size-9 items-center justify-center gap-1 rounded-full bg-bg/80 text-xs ring-1 ring-border hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent md:size-auto md:min-h-9 md:px-3">
+            <RotateCcw className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Reset view</span>
           </button>
-          <p className="absolute bottom-3 left-3 rounded-full bg-bg/80 px-3 py-1 text-xs ring-1 ring-border" aria-live="polite">
+          <p data-view={focusSeat?.id ?? "overview"} className="absolute bottom-3 left-3 rounded-full bg-bg/80 px-3 py-1 text-xs ring-1 ring-border" aria-live="polite">
             {focusSeat ? `View from Row ${focusSeat.row}, Seat ${focusSeat.n}` : 'Overview · drag to look around'}
           </p>
         </>
       )}
       {threeOn && !lostNote && (
-        <button onClick={() => { localStorage.setItem('lumen.simple', '1'); setThreeOn(false) }} className="absolute bottom-3 right-3 inline-flex min-h-9 items-center gap-1 rounded-full bg-bg/80 px-3 text-xs ring-1 ring-border hover:bg-surface-2">
-          <Eye className="size-3.5" /> Simple view
+        <button onClick={() => { localStorage.setItem('lumen.simple', '1'); setThreeOn(false) }} aria-label="Simple view" className="absolute bottom-3 right-3 inline-flex size-9 items-center justify-center gap-1 rounded-full bg-bg/80 text-xs ring-1 ring-border hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent md:size-auto md:min-h-9 md:px-3">
+          <Eye className="size-4 md:size-3.5" aria-hidden /> <span className="hidden md:inline">Simple view</span>
         </button>
       )}
     </div>
@@ -132,15 +136,15 @@ export default function SeatsPage() {
       <Container className="pt-6">
         <div className="mb-4">
           <Link to={`/movie/${id}`} className="text-sm text-text-muted hover:text-text">← Back to showtimes</Link>
-          <h1 className="font-display text-4xl uppercase tracking-wide md:text-5xl">{movie.data?.title ?? '…'} <span className="text-base text-text-muted">[PH]</span></h1>
-          {show && <p className="text-sm text-text-muted">{dayLabel(show.start)} · {time(show.start)} · {show.format} · {map.data?.hall.name}</p>}
+          <h1 className="min-h-10 font-display text-4xl uppercase md:min-h-12 tracking-wide md:text-5xl">{movie.data?.title ?? '…'} <span className="text-base text-text-muted">[PH]</span></h1>
+          <p className="min-h-5 text-sm text-text-muted">{show ? `${dayLabel(show.start)} · ${time(show.start)} · ${show.format} · ${map.data?.hall.name}` : '\u00a0'}</p>
         </div>
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
           <div className="lg:sticky lg:top-32 lg:flex-1">
             {view}
             <button className="mt-2 text-xs text-text-muted underline lg:hidden" onClick={() => setCollapsed((c) => !c)}>{collapsed ? 'Show preview view' : 'Hide preview to make room'}</button>
           </div>
-          <Card className="p-4 lg:w-[440px]">
+          <Card className="min-h-[580px] p-4 lg:min-h-[528px] lg:w-[440px]">
             {!map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-10 sm:h-6" />)}</div> : (
               <>
                 <SeatMap2D hall={map.data.hall} taken={taken} selected={selected} price={price} onPick={pick} onHover={setHovered} shakeId={shake} compact={false} />

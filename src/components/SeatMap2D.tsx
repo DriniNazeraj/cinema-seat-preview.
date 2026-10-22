@@ -27,7 +27,8 @@ type Props = {
 export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shakeId, readOnly, compact }: Props) {
   const firstFree = hall.rows.flatMap((r) => r.seats).find((s) => !taken.has(s.id))
   const [focusId, setFocusId] = useState<string | undefined>(selected[0] ?? firstFree?.id)
-  const [tip, setTip] = useState<Seat | null>(null)
+  const [tip, setTip] = useState<{ seat: Seat; x: number; top: number; bottom: number; below: boolean } | null>(null)
+  const wrap = useRef<HTMLDivElement>(null)
   const ref = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   // start the (wide) mobile map centred on the middle block
@@ -58,12 +59,17 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
   const hit = compact ? 'size-[14px] sm:size-4' : 'size-11 sm:size-[18px]'
   const vis = compact ? 'size-full text-[8px]' : 'size-7 sm:size-full text-[10px] sm:text-[9px]'
   return (
-    <div className="relative">
+    <div className="relative" ref={wrap}>
       <div className="mx-auto mb-4 w-4/5">
         <div className="h-2 rounded-[50%/100%_100%_0_0] bg-gradient-to-b from-accent/80 to-transparent" />
         <p className="mt-1 text-center text-[10px] tracking-[0.4em] text-text-muted">SCREEN</p>
       </div>
       {!compact && <p className="mb-2 text-center text-[11px] text-text-muted sm:hidden">Swipe or pinch to see all seats</p>}
+      <div className="relative">
+      {!compact && <>
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-5 z-10 w-4 bg-gradient-to-r from-surface to-transparent sm:hidden" />
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 right-5 z-10 w-4 bg-gradient-to-l from-surface to-transparent sm:hidden" />
+      </>}
       <div ref={scroller} className="overflow-x-auto overscroll-x-contain pb-2 [touch-action:pan-x_pan-y_pinch-zoom]">
         <div ref={ref} role="grid" data-seatgrid aria-label={`Seat map, ${hall.name}`} aria-readonly={readOnly || undefined} className={cn('mx-auto flex w-max flex-col', compact ? 'gap-[3px] sm:gap-1' : 'gap-0 sm:gap-1')}>
           {hall.rows.map((row) => (
@@ -85,7 +91,12 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
                       onClick={() => !readOnly && onPick(seat)}
                       onKeyDown={(e) => onKey(e, seat)}
                       onFocus={() => { setFocusId(seat.id); onHover?.(seat) }}
-                      onMouseEnter={() => { setTip(seat); onHover?.(seat) }}
+                      onMouseEnter={(e) => {
+                        const w = wrap.current!.getBoundingClientRect(), r = e.currentTarget.getBoundingClientRect()
+                        const ri = hall.rows.findIndex((x) => x.label === seat.row)
+                        setTip({ seat, x: r.left + r.width / 2 - w.left, top: r.top - w.top, bottom: r.bottom - w.top, below: ri < 2 })
+                        onHover?.(seat)
+                      }}
                       onMouseLeave={() => { setTip(null); onHover?.(null) }}
                       className={cn(hit, 'group grid shrink-0 place-items-center focus-visible:outline-none', st === 'taken' && 'cursor-not-allowed', readOnly && 'pointer-events-none')}
                     >
@@ -105,9 +116,12 @@ export function SeatMap2D({ hall, taken, selected, price, onPick, onHover, shake
           ))}
         </div>
       </div>
+      </div>
       {tip && !readOnly && (
-        <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 rounded-full bg-surface-2 px-3 py-1 text-xs ring-1 ring-border" aria-hidden>
-          Row {tip.row} · Seat {tip.n} · {eur(price)} [PH]
+        <div className="pointer-events-none absolute z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-surface-2 px-3 py-1 text-xs ring-1 ring-border"
+          style={tip.below ? { left: tip.x, top: tip.bottom + 6 } : { left: tip.x, top: tip.top - 6, transform: 'translate(-50%, -100%)' }}
+          data-tip={tip.below ? 'below' : 'above'} aria-hidden>
+          Row {tip.seat.row} · Seat {tip.seat.n} · {eur(price)} [PH]
         </div>
       )}
     </div>
