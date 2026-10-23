@@ -325,6 +325,7 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone, onFacing }: Pick
   const seatView = useRef(false)
   seatView.current = !!focusSeat
   const t0 = useRef(0)
+  const facing = useRef<'left' | 'right' | null | undefined>(null)
 
   useEffect(() => { camera.position.copy(to.current.pos); base.current.copy(to.current.pos); camera.lookAt(to.current.look) }, [camera])
 
@@ -336,7 +337,9 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone, onFacing }: Pick
     t.current = instant ? 1 : 0
     t0.current = -1 // fix12: time-based glide; the 400ms clock starts on the first frame after the click (wall clock, not summed dt)
     drag.current.active = false
+    facing.current = undefined // fix15.1: force the Screen chip state to be re-sent on the next frame after any reset/move
     if (instant) {
+      facing.current = null; onFacing?.(null)
       base.current.copy(target.pos); camera.position.copy(target.pos); look.current.copy(target.look); drag.current.yaw = 0; drag.current.pitch = 0; drag.current.zoom = 1
       const dir = target.look.clone().sub(target.pos); camera.lookAt(target.look); invalidate()
       ;(window as Window & { __lumenDrag?: unknown }).__lumenDrag = { yaw: 0, pitch: 0, zoom: 1, dx: dir.x, dy: dir.y, dz: dir.z, facing: null, px: target.pos.x, py: target.pos.y, pz: target.pos.z } // QA hook, same frame
@@ -393,7 +396,6 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone, onFacing }: Pick
     return () => { el.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); el.removeEventListener('lostpointercapture', up); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', key) }
   }, [gl, invalidate])
 
-  const facing = useRef<'left' | 'right' | null>(null)
   useFrame(() => {
     const d = drag.current
     if (t.current < 1) {
@@ -404,6 +406,7 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone, onFacing }: Pick
       base.current.lerpVectors(from.current.pos, to.current.pos, k)
       look.current.lerpVectors(from.current.look, to.current.look, k)
       if (!d.active) { d.yaw = fromDrag.current.yaw * (1 - k); d.pitch = fromDrag.current.pitch * (1 - k); d.zoom = 1 + (fromDrag.current.zoom - 1) * (1 - k) }
+      if (t.current >= 1) { d.yaw = 0; d.pitch = 0; d.zoom = 1; d.active = false } // fix15.1 (QA): Reset/move always lands exactly on 0
     }
     const z = seatView.current ? 1 : d.zoom
     camera.position.copy(look.current).addScaledVector(look.current.clone().sub(base.current), -z)

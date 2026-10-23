@@ -1,5 +1,5 @@
 /** §11 seat sheet on Radix Dialog (non-modal so the hall stays draggable) + FocusScope trap.
- *  Mobile <768: bottom sheet max-h-[72svh] with drag handle. Desktop: floating panel right-4 top-16 bottom-4 w-[min(480px,40vw)]. Focus lands on the title on open (fix6). */
+ *  Mobile <768: bottom sheet h-[72svh] (fix15.1: fixed, not max-h, so late content/font swap can't move its top edge = CLS) with drag handle. Desktop: floating panel right-4 top-16 bottom-4 w-[min(480px,40vw)]. Focus lands on the title on open (fix6). */
 import * as D from '@radix-ui/react-dialog'
 import { FocusScope } from '@radix-ui/react-focus-scope'
 import { X } from 'lucide-react'
@@ -14,7 +14,7 @@ export function SeatSheet({ open, onCollapse, title, children, footer }: { open:
         <D.Content
           onOpenAutoFocus={(e) => { e.preventDefault(); titleRef.current?.focus() }}
           onInteractOutside={(e) => e.preventDefault()}
-          className="fixed inset-x-0 bottom-0 z-[55] flex max-h-[72svh] flex-col rounded-t-2xl bg-surface/95 ring-1 ring-border backdrop-blur focus:outline-none md:inset-x-auto md:bottom-4 md:right-4 md:top-16 md:max-h-none md:w-[min(480px,40vw)] md:rounded-2xl"
+          className="fixed inset-x-0 bottom-0 z-[55] flex h-[72svh] flex-col rounded-t-2xl bg-surface/95 ring-1 ring-border backdrop-blur focus:outline-none md:inset-x-auto md:bottom-4 md:right-4 md:top-16 md:h-auto md:w-[min(480px,40vw)] md:rounded-2xl"
         >
           <FocusScope trapped={open} loop asChild onMountAutoFocus={(e) => { e.preventDefault(); titleRef.current?.focus({ preventScroll: true }) }}>
             <div className="flex min-h-0 flex-1 flex-col">

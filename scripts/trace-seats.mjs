@@ -6,7 +6,7 @@ const s = await c.newCDPSession(p); await s.send('Emulation.setCPUThrottlingRate
 const ev = []; s.on('Tracing.dataCollected', (d) => ev.push(...d.value))
 const done = new Promise((r) => s.once('Tracing.tracingComplete', r))
 await s.send('Tracing.start', { categories: 'devtools.timeline,disabled-by-default-devtools.timeline,v8.execute', transferMode: 'ReportEvents' })
-await p.goto('http://localhost:4175/movie/starlight-run/seats?3d=1' + (process.argv[2] ? '&' + process.argv[2] : '')); await p.waitForSelector('[role="dialog"] [data-seat]', { timeout: 30000 }); await p.waitForTimeout(1500)
+await p.goto('http://localhost:4175/movie/iron-orchard/seats?show=iron-orchard-2026-10-25-1845&3d=1' + (process.argv[2] ? '&' + process.argv[2] : '')); await p.waitForTimeout(6000); await p.waitForTimeout(1500)
 await s.send('Tracing.end'); await done
 const main = ev.find((e) => e.name === 'thread_name' && e.args.name === 'CrRendererMain' && ev.some((x) => x.tid === e.tid && x.name === 'RunTask'))
 const tid = main.tid, nav = ev.find((e) => e.name === 'navigationStart')?.ts ?? ev[0].ts

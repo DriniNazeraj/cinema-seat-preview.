@@ -29,6 +29,12 @@ class GLBoundary extends Component<{ onError: () => void; children: ReactNode },
   render() { return this.state.failed ? null : this.props.children }
 }
 
+/** "Sat 25 Oct, 18:45" (§15.u expired-show toast) */
+function fmtShowtime(iso: string) {
+  const d = new Date(iso), p = (n: number) => String(n).padStart(2, '0')
+  return `${d.toLocaleDateString('en-GB', { weekday: 'short' })} ${d.getDate()} ${d.toLocaleDateString('en-GB', { month: 'short' })}, ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 export default function SeatsPage() {
   const { id = '' } = useParams()
   const [q, setQ] = useSearchParams()
@@ -86,19 +92,28 @@ export default function SeatsPage() {
 
   // No ?show= in the URL (e.g. a shared/bookmarked /movie/:id/seats link): pick the next bookable show
   // instead of dead-ending, keeping other params such as ?3d=1.
+  // fix15.1: an expired or unknown ?show= (old shared link) falls forward to the next upcoming show of the same film
+  // (history.replace, other params such as ?party= kept). The error card only shows when the film has no future shows.
+  const showGone = !!showId && (!!map.error || (!!map.data && new Date(map.data.show.start).getTime() <= Date.now()))
   useEffect(() => {
-    if (showId) return
+    if (showId && !showGone) return
     let live = true
     listShows({ movieId: id }).then((list) => {
       if (!live) return
       const open = list.filter((s) => !s.soldOut)
-      const next = open.find((s) => new Date(s.start).getTime() > Date.now()) ?? open[0]
-      if (!next) return setNoShows(true)
+      const next = open.filter((s) => s.id !== showId).find((s) => new Date(s.start).getTime() > Date.now())
+      // §15.u (designer wording): expired show -> next showtime + toast; none left -> movie page + toast. ?party / ?3d are kept.
+      if (!next) {
+        if (!showGone) return setNoShows(true)
+        toast('That showing has ended.')
+        return nav(`/movie/${id}`, { replace: true })
+      }
+      if (showGone) toast(`That showing has ended. Here's the next one, ${fmtShowtime(next.start)}.`)
       const p = new URLSearchParams(q); p.set('show', next.id)
       setQ(p, { replace: true })
     })
     return () => { live = false }
-  }, [showId, id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [showId, showGone, id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (showId) booking.setShow(showId) }, [showId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     resetSeatMapZoom()
@@ -123,6 +138,8 @@ export default function SeatsPage() {
   // fix9: the prerendered static curtain (outside #root, see scripts/prerender.ts) goes once the real curtains are gone
   useEffect(() => { if (curtain === 'gone') document.getElementById('seat-static')?.remove() }, [curtain])
   useEffect(() => () => document.getElementById('seat-static')?.remove(), [])
+  // fix15.1 (QA blocker): the static curtain must also clear on every non-hall outcome (no shows, load error), or it covers the error card
+  useEffect(() => { if (noShows || (map.error && !showGone)) document.getElementById('seat-static')?.remove() }, [noShows, map.error, showGone])
   // fix13 (SEO LCP): the curtain (.velvet-static) stays flat #7A1F2B for the whole load; the velvet tile painted late and became the LCP element
   useEffect(() => { if (!sheetOpen && curtain === 'gone') peekRef.current?.focus({ preventScroll: true }) }, [sheetOpen, curtain])
   useEffect(() => { if (movie.data) document.title = `Choose seats · ${movie.data.title} [PH] | Lumen Cinema [PH]` }, [movie.data])
@@ -258,7 +275,7 @@ export default function SeatsPage() {
   const ghost = !split && hover2D && map.data && !selected.includes(hover2D.id) && !taken.has(hover2D.id) && G ? new Set(G.placeGroup(map.data.hall, hover2D, party, taken).ids) : undefined
   const groupLabel = !selected.length ? 'Pick a seat for your group [PH]' : selected.length < party ? `${selected.length} of ${party} picked [PH]` : `${rangeLabel(selected, seatsById).replace(' to ', '-')} · ${selected.length} seat${selected.length === 1 ? '' : 's'} [PH]`
 
-  if (!showId) return (
+  if (!showId || showGone) return (
     <Container className="min-h-[115svh] py-10">
       {noShows ? <ErrorCard message="No bookable showtimes for this film." onRetry={() => nav(`/movie/${id}`)} /> : <Skeleton className="h-96" />}
     </Container>
@@ -327,10 +344,10 @@ export default function SeatsPage() {
           </div>
         )}
         {threeOn && threeReady && !lostNote && (
-          <button type="button" data-screen-chip={facing ?? 'hidden'} onClick={() => setResetKey((k) => k + 1)} aria-hidden={!facing} tabIndex={facing ? 0 : -1}
+          <button type="button" aria-label="Turn to face the screen" data-screen-chip={facing ?? 'hidden'} onClick={() => setResetKey((k) => k + 1)} aria-hidden={!facing} tabIndex={facing ? 0 : -1}
             className={cn('absolute top-1/2 z-10 h-8 -translate-y-1/2 rounded-full bg-black/60 px-3 text-xs text-white', facing === 'right' ? 'right-3' : 'left-3',
               !reduceMotion && 'transition-opacity duration-150', facing ? 'opacity-100' : 'pointer-events-none opacity-0')}>
-            {facing === 'left' ? '‹ Screen' : 'Screen ›'} <span className="sr-only">[PH] turn back to the screen</span>
+            {facing === 'left' ? '‹ Screen' : 'Screen ›'}
           </button>
         )}
         {threeOn && threeReady && !lostNote && (
