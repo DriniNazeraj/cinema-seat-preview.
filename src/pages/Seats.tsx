@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, Component, type R
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ArrowLeft, Box, ChevronLeft, ChevronRight, LayoutGrid, RotateCcw, Users } from 'lucide-react'
-import { createHold, getMovie, getSeatMap, listShows, MAX_SEATS, SeatTakenError, type Seat } from '@/lib/api'
+import { createHold, getMovie, getSeatMap, listShows, isNotFound, MAX_SEATS, SeatTakenError, type Seat } from '@/lib/api'
 import { rangeLabel } from '@/lib/group-label'
 // fix12 (TBT): group placement maths load lazily, on the first tap / hover on the map or 3D preview, never at startup
 type GroupLib = typeof import('@/lib/group')
@@ -94,7 +94,11 @@ export default function SeatsPage() {
   // instead of dead-ending, keeping other params such as ?3d=1.
   // fix15.1: an expired or unknown ?show= (old shared link) falls forward to the next upcoming show of the same film
   // (history.replace, other params such as ?party= kept). The error card only shows when the film has no future shows.
-  const showGone = !!showId && (!!map.error || (!!map.data && new Date(map.data.show.start).getTime() <= Date.now()))
+  // fix15.2: ignore a stale result from the previous ?show= (data id must match; a show we just redirected to is never "gone"
+  // until its own fetch says so), otherwise the redirect would chain through every showtime
+  const redirectedTo = useRef<string | null>(null)
+  const fresh = !!map.data && map.data.show.id === showId
+  const showGone = !!showId && ((isNotFound(map.error) && redirectedTo.current !== showId) || (fresh && new Date(map.data!.show.start).getTime() <= Date.now()))
   useEffect(() => {
     if (showId && !showGone) return
     let live = true
@@ -109,6 +113,7 @@ export default function SeatsPage() {
         return nav(`/movie/${id}`, { replace: true })
       }
       if (showGone) toast(`That showing has ended. Here's the next one, ${fmtShowtime(next.start)}.`)
+      redirectedTo.current = next.id
       const p = new URLSearchParams(q); p.set('show', next.id)
       setQ(p, { replace: true })
     })
@@ -280,7 +285,8 @@ export default function SeatsPage() {
       {noShows ? <ErrorCard message="No bookable showtimes for this film." onRetry={() => nav(`/movie/${id}`)} /> : <Skeleton className="h-96" />}
     </Container>
   )
-  if (map.error) return <Container className="py-16"><ErrorCard onRetry={map.retry} /></Container>
+  // fix15.2: a transient (network/5xx) error stays on this page; party size, picks and the hold live in state/booking and survive Try again
+  if (map.error) return <Container className="py-16"><ErrorCard message="Couldn't load seats. Check your connection." onRetry={map.retry} /></Container>
 
   const show = map.data?.show
   const soldOut = !!map.data && map.data.hall.rows.every((r) => r.seats.every((s) => taken.has(s.id)))

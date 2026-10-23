@@ -155,7 +155,12 @@ function takenFor(show: Show, hall: Hall): string[] {
   const all = hall.rows.flatMap((r) => r.seats.map((s) => s.id))
   if (show.soldOut) return all
   const rnd = seeded(hash(show.id))
-  return all.filter(() => rnd() < 0.28)
+  const taken = all.filter(() => rnd() < 0.28)
+  // QA fixture: one taken access seat (J2) on this show; other access seats stay free.
+  if (show.id === 'iron-orchard-2026-10-25-1845') {
+    return [...taken.filter((id) => !['J1', 'J2', 'J15', 'J16'].includes(id)), 'J2']
+  }
+  return taken
 }
 
 const delay = (ms = 120) => new Promise((r) => setTimeout(r, ms))
@@ -180,10 +185,29 @@ export async function getShow(id: string): Promise<Show | null> {
   await delay(40)
   return shows().find((s) => s.id === id) ?? null
 }
+/** fix15.2: typed API errors, mirroring the real API (PR #3): 404 NOT_FOUND = show missing; anything else (network, 5xx) is transient. No 410. */
+export class NotFoundError extends Error { readonly status = 404; readonly code = 'NOT_FOUND'; constructor(msg = 'Not found') { super(msg); this.name = 'NotFoundError' } }
+export class NetworkError extends Error { constructor(msg = 'Network error') { super(msg); this.name = 'NetworkError' } }
+export const isNotFound = (e: unknown): e is NotFoundError => e instanceof NotFoundError
+/** An ended show still exists (200, start in the past, soldOut true), like the real API. The mock only generates today+6 days,
+ *  so ids of earlier days (<= 60 days back, known film + time slot) are synthesised here. */
+function endedShow(id: string): Show | undefined {
+  const m = /^(.+)-(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})$/.exec(id); if (!m) return
+  const [, movieId, day, hh, mm] = m, mi = MOVIES.findIndex((x) => x.id === movieId), ti = TIMES.indexOf(`${hh}:${mm}`)
+  if (mi < 0 || ti < 0) return
+  const start = new Date(`${day}T${hh}:${mm}:00`), age = Date.now() - start.getTime()
+  if (!(age > 0 && age < 60 * 864e5)) return
+  const format = (['2D', '3D', 'IMAX'] as const)[(mi + ti) % 3]
+  return { id, movieId, start: start.toISOString(), format, hallId: HALLS[(mi + ti) % 2].id, price: PRICE[format], soldOut: true }
+}
 export async function getSeatMap(showId: string): Promise<SeatMap> {
   await delay()
-  const show = shows().find((s) => s.id === showId)
-  if (!show) throw new Error('Show not found')
+  // QA hook: sessionStorage lumen.qa.failSeatMap='1' simulates a network/5xx failure
+  let fail = false; try { fail = sessionStorage.getItem('lumen.qa.failSeatMap') === '1' } catch { /* no storage */ }
+  if (fail) throw new NetworkError('Simulated network failure')
+  const found = shows().find((s) => s.id === showId)
+  const show = found && new Date(found.start).getTime() <= Date.now() ? { ...found, soldOut: true } : found ?? endedShow(showId)
+  if (!show) throw new NotFoundError('Show not found')
   const hall = HALLS.find((h) => h.id === show.hallId)!
   return SeatMapSchema.parse({ show, hall, taken: takenFor(show, hall) })
 }
