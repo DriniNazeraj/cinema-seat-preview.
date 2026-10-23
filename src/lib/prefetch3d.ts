@@ -17,13 +17,14 @@ export function prefetchHall3D() {
   const nav = navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }
   const et = nav.connection?.effectiveType ?? ''
   if (nav.connection?.saveData || ['slow-2g', '2g', '3g'].includes(et)) return
-  if (decideThree().mode !== 'auto') return
   if (new URLSearchParams(location.search).get('noprefetch') === '1') return // measurement A/B only
   const urls = (document.querySelector('meta[name="lumen-hall3d"]')?.getAttribute('content') ?? '').split(',').filter(Boolean)
   if (!urls.length) return // dev server / no manifest
   started = true
   const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }
+  // fix15.3: the device checks (decideThree -> WebGL probe) run here, in the idle slot after LCP, not in the Movie mount effect
   const go = () => {
+    if (decideThree().mode !== 'auto') return
     let left = urls.length
     for (const href of urls) {
       const l = document.createElement('link'); l.rel = 'prefetch'; l.href = href; l.as = 'script'; l.crossOrigin = ''

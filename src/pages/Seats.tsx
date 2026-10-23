@@ -351,7 +351,10 @@ export default function SeatsPage() {
         )}
         {threeOn && threeReady && !lostNote && (
           <button type="button" aria-label="Turn to face the screen" data-screen-chip={facing ?? 'hidden'} onClick={() => setResetKey((k) => k + 1)} aria-hidden={!facing} tabIndex={facing ? 0 : -1}
-            className={cn('absolute top-1/2 z-10 h-8 -translate-y-1/2 rounded-full bg-black/60 px-3 text-xs text-white', facing === 'right' ? 'right-3' : 'left-3',
+            // fix15.3 (QA blocker): with the desktop seat sheet open, a right-side chip sat under the sheet (z-55) and the click hit the sheet.
+            // Sheet open on desktop -> pinned top-centre of the canvas area (top-4 below the h-14 top bar, which overlays the canvas), above the canvas, below dialogs; tap = Reset, sheet stays open.
+            className={cn('absolute z-20 h-8 rounded-full bg-black/60 px-3 text-xs text-white',
+              sheetOpen && !isPhone() ? 'left-1/2 top-[4.5rem] -translate-x-1/2' : cn('top-1/2 -translate-y-1/2', facing === 'right' ? 'right-3' : 'left-3'),
               !reduceMotion && 'transition-opacity duration-150', facing ? 'opacity-100' : 'pointer-events-none opacity-0')}>
             {facing === 'left' ? '‹ Screen' : 'Screen ›'}
           </button>

@@ -2,11 +2,20 @@
 export type ThreeMode = 'auto' | 'on-demand' | 'off'
 export type ThreeDecision = { mode: ThreeMode; reason?: string }
 
+/** fix15.3: creating a probe WebGL context costs 100-300 ms on slow/software GPUs (SEO r151: prefetch3d chunk 176-379 ms at 4x).
+ *  Probe once per session (cached in memory + sessionStorage) and release the probe context straight away. */
+let webgl: boolean | undefined
 export function hasWebGL(): boolean {
+  if (webgl !== undefined) return webgl
+  try { const v = sessionStorage.getItem('lumen.webgl'); if (v) return (webgl = v === '1') } catch { /* private mode */ }
   try {
     const c = document.createElement('canvas')
-    return !!(c.getContext('webgl2') || c.getContext('webgl'))
-  } catch { return false }
+    const gl = (c.getContext('webgl2') || c.getContext('webgl')) as WebGLRenderingContext | null
+    webgl = !!gl
+    gl?.getExtension('WEBGL_lose_context')?.loseContext()
+  } catch { webgl = false }
+  try { sessionStorage.setItem('lumen.webgl', webgl ? '1' : '0') } catch { /* private mode */ }
+  return webgl
 }
 
 export function decideThree(): ThreeDecision {

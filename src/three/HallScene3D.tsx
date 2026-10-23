@@ -162,7 +162,7 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
     if (pv) { tmp.position.set(pv.pos.x, pv.pos.y, pv.pos.z); tmp.updateMatrix(); previewEdge.current!.setMatrixAt(0, tmp.matrix) }
     previewEdge.current!.count = pv ? 1 : 0; previewEdge.current!.instanceMatrix.needsUpdate = true
   }, [items, open, shut, taken, selected, hovered, preview, tmp])
-  const { camera: cam, size } = useThree()
+  const { camera: cam, size, gl } = useThree()
     // fix13 hit test: return a screen point where a tap really lands on THIS seat (raycast-verified against both seat meshes);
   // the old single cushion point was often hidden by the row nearer the camera, so taps there opened the neighbour.
   useEffect(() => {
@@ -190,7 +190,53 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
       }
       void list; return fallback
     }
-  }, [items, open, shut, taken, cam, size])
+    // fix15.3 QA hooks in CLIENT (page) coordinates, i.e. what a real pointer event carries
+    const W = w as Window & { __lumenSeatCenter?: (id: string) => { x: number; y: number } | null; __lumenSeatAt?: (x: number, y: number) => string | null }
+    W.__lumenSeatCenter = (id) => {
+      const it = items.find((i) => i.seat.id === id); if (!it) return null
+      const r = gl.domElement.getBoundingClientRect(), v = new THREE.Vector3(it.pos.x, it.pos.y + 0.44, it.pos.z).project(cam)
+      if (v.z > 1 || Math.abs(v.x) > 1 || Math.abs(v.y) > 1) return null
+      return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }
+    }
+    W.__lumenSeatAt = (x, y) => {
+      const r = gl.domElement.getBoundingClientRect()
+      rc.setFromCamera(new THREE.Vector2((x - r.left) / r.width * 2 - 1, -((y - r.top) / r.height) * 2 + 1), cam)
+      const hit = rc.intersectObjects([mesh.current!, takenMesh.current!], false)[0]
+      return hit?.instanceId != null ? (hit.object === mesh.current ? open : shut)[hit.instanceId]?.seat.id ?? null : null
+    }
+  }, [items, open, shut, taken, cam, size, gl])
+
+  // fix15.3 (QA, real clicks opened the wrong seat): R3F resolved onClick at click time = pointerup, against wherever the camera
+  // had glided to by then (Back / seat fly / Reset are 400ms glides), so a click on what the user SAW at press could land on a seat
+  // several rows away (E10 -> J6). Now the seat is resolved once at pointerdown, from the event's client coords against the canvas
+  // rect and the camera matrices of the frame on screen, and confirmed at pointerup (same pointer, < 8px travel, no 2nd finger).
+  const pickRef = useRef<{ id: number; x: number; y: number; seat: typeof items[number]['seat'] } | null>(null)
+  const onPickRef = useRef(onPick); onPickRef.current = onPick
+  useEffect(() => {
+    const el = gl.domElement, rc = new THREE.Raycaster(), ndc = new THREE.Vector2()
+    const seatAt = (cx: number, cy: number) => {
+      const r = el.getBoundingClientRect(); if (!mesh.current || !takenMesh.current || !r.width) return null
+      ndc.set((cx - r.left) / r.width * 2 - 1, -((cy - r.top) / r.height) * 2 + 1)
+      rc.setFromCamera(ndc, cam) // matrixWorld = the frame being shown (updated by the renderer)
+      const hit = rc.intersectObjects([mesh.current, takenMesh.current], false)[0]
+      return hit?.instanceId != null ? (hit.object === mesh.current ? open : shut)[hit.instanceId]?.seat ?? null : null
+    }
+    let pointers = 0
+    const down = (e: PointerEvent) => {
+      pointers++
+      if (pointers > 1 || e.button > 0) { pickRef.current = null; return }
+      const seat = seatAt(e.clientX, e.clientY)
+      pickRef.current = seat ? { id: e.pointerId, x: e.clientX, y: e.clientY, seat } : null
+    }
+    const up = (e: PointerEvent) => {
+      pointers = Math.max(0, pointers - 1)
+      const pk = pickRef.current; pickRef.current = null
+      if (!pk || pk.id !== e.pointerId || e.type !== 'pointerup' || Math.hypot(e.clientX - pk.x, e.clientY - pk.y) > 8) return // a drag is not a tap
+      onPickRef.current(pk.seat)
+    }
+    el.addEventListener('pointerdown', down); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up)
+    return () => { el.removeEventListener('pointerdown', down); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up) }
+  }, [gl, cam, open, shut])
 
   // §14 in-place quality drop also drops sheen + normal map (one recompile, at the drop only)
   useEffect(() => { const v = velvet.current; if (!v || !low) return; v.sheen = 0; v.normalMap = null; v.needsUpdate = true }, [low])
@@ -210,7 +256,7 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
     else if (hovered?.id !== item.seat.id) onHover(item.seat)
   }
   const ev = (list: typeof items) => ({
-    onClick: (e: ThreeEvent<MouseEvent>) => handle(list)(e, 'click'), onPointerMove: (e: ThreeEvent<PointerEvent>) => handle(list)(e, 'move'), onPointerOut: () => onHover(null),
+    onPointerMove: (e: ThreeEvent<PointerEvent>) => handle(list)(e, 'move'), onPointerOut: () => onHover(null),
   })
   const noRay = () => null
   return (
@@ -386,6 +432,7 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone, onFacing }: Pick
     const wheel = (e: WheelEvent) => { if (seatView.current) return; e.preventDefault(); drag.current.zoom = THREE.MathUtils.clamp(drag.current.zoom * Math.exp(e.deltaY * 0.001), ZOOM[0], ZOOM[1]) }
     // desktop a11y: ← / → turn 15° per press while the canvas has focus
     const key = (e: KeyboardEvent) => { if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return; e.preventDefault(); drag.current.yaw += (e.key === 'ArrowLeft' ? 1 : -1) * Math.PI / 12; invalidate() }
+    ;(window as Window & { __lumenSetYaw?: (deg: number) => void }).__lumenSetYaw = (v) => { drag.current.yaw = THREE.MathUtils.degToRad(v); invalidate() } // QA hook: exact angles
     el.tabIndex = 0; el.setAttribute('aria-label', 'Cinema hall 3D view. Arrow keys turn left and right. [PH]')
     el.style.touchAction = 'none' // fix15: pinch zoom + 360° drag belong to the hall, not the page
     el.addEventListener('pointerdown', down)
@@ -418,9 +465,12 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone, onFacing }: Pick
     // §15.u rev 3 screen hint: which side the screen is on once it is more than 90° off-centre
     const tgt = SCREEN_CENTER.clone().sub(camera.position)
     const a = Math.atan2(dir.z * tgt.x - dir.x * tgt.z, dir.x * tgt.x + dir.z * tgt.z)
-    const f = Math.abs(a) > Math.PI / 2 ? (a > 0 ? 'left' : 'right') : null
+    // fix15.3 §15.u: hysteresis, same code path for overview and seat view: show once |turn| > 95°, hide once < 85°, otherwise keep.
+    // From hidden, exactly 90° stays hidden. While shown, the side only flips well past 180° (no left/right flicker at exactly ±180°).
+    const A = Math.abs(a), prev = facing.current ?? null
+    const f = prev ? (A < deg(85) ? null : A < deg(175) ? (a > 0 ? 'left' : 'right') : prev) : A > deg(95) ? (a > 0 ? 'left' : 'right') : null
     if (f !== facing.current) { facing.current = f; onFacing?.(f) }
-    ;(window as Window & { __lumenDrag?: unknown }).__lumenDrag = { yaw: d.yaw, pitch: d.pitch, zoom: z, dx: dir.x, dy: dir.y, dz: dir.z, facing: f, px: camera.position.x, py: camera.position.y, pz: camera.position.z } // QA hook
+    ;(window as Window & { __lumenDrag?: unknown }).__lumenDrag = { t: t.current, yaw: d.yaw, pitch: d.pitch, zoom: z, dx: dir.x, dy: dir.y, dz: dir.z, facing: f, px: camera.position.x, py: camera.position.y, pz: camera.position.z } // QA hook
   })
   return null
 }
