@@ -26,6 +26,8 @@ export type HallSceneProps = {
   resetKey: number
   phone: boolean
   instant: boolean
+  /** fix15 §15.u rev 3: the screen is >90° off-centre on this side (null = facing it) */
+  onFacing?: (side: 'left' | 'right' | null) => void
 }
 
 const SPACING_X = 0.62
@@ -119,7 +121,7 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
     return g
   }, [])
   const woodGeo = useMemo(woodGeometry, []), brassGeo = useMemo(brassGeometry, []), chairGeo = useMemo(wheelchairGeometry, [])
-  const wood = useRef<THREE.InstancedMesh>(null), brass = useRef<THREE.InstancedMesh>(null), chair = useRef<THREE.InstancedMesh>(null)
+  const wood = useRef<THREE.InstancedMesh>(null), brass = useRef<THREE.InstancedMesh>(null), chair = useRef<THREE.InstancedMesh>(null), chairTaken = useRef<THREE.InstancedMesh>(null)
   const edgeGeo = useMemo(() => edgeGeometry(1, !phone), [phone]), glowGeo = useMemo(() => edgeGeometry(phone ? 2.6 : 1.8, !phone), [phone])
   const tmp = useMemo(() => new THREE.Object3D(), [])
   const MAXSEL = 8
@@ -142,7 +144,11 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
     const acc = open.filter((i) => i.seat.type === 'access')
     acc.forEach(({ seat, pos }, i) => { tmp.position.set(pos.x, pos.y + (selected.includes(seat.id) ? 0.08 : 0), pos.z); tmp.updateMatrix(); chair.current!.setMatrixAt(i, tmp.matrix) })
     chair.current!.count = acc.length
-    for (const x of [wood.current!, brass.current!, chair.current!]) { x.instanceMatrix.needsUpdate = true; x.computeBoundingSphere() }
+    // fix15 §15.v: taken access seats keep the wheelchair icon, 40% opacity on the taken colour
+    const accT = shut.filter((i) => i.seat.type === 'access')
+    accT.forEach(({ pos }, i) => { tmp.position.set(pos.x, pos.y, pos.z); tmp.updateMatrix(); chairTaken.current!.setMatrixAt(i, tmp.matrix) })
+    chairTaken.current!.count = accT.length
+    for (const x of [wood.current!, brass.current!, chair.current!, chairTaken.current!]) { x.instanceMatrix.needsUpdate = true; x.computeBoundingSphere() }
     for (const x of [m, t]) { x.instanceMatrix.needsUpdate = true; if (x.instanceColor) x.instanceColor.needsUpdate = true; x.computeBoundingSphere() }
     const sel = open.filter((i) => selected.includes(i.seat.id)).slice(0, MAXSEL)
     for (const e of [edge.current!, glow.current!]) {
@@ -224,6 +230,9 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
       <instancedMesh ref={chair} args={[chairGeo, undefined, items.length]} raycast={noRay}>
         <meshBasicMaterial color="#ffffff" side={THREE.DoubleSide} toneMapped={false} />
       </instancedMesh>
+      <instancedMesh ref={chairTaken} args={[chairGeo, undefined, items.length]} raycast={noRay}>
+        <meshBasicMaterial color="#ffffff" side={THREE.DoubleSide} toneMapped={false} transparent opacity={0.4} depthWrite={false} />
+      </instancedMesh>
       <instancedMesh ref={edge} args={[edgeGeo, undefined, MAXSEL]} raycast={noRay}>
         <meshBasicMaterial ref={edgeMat} color="#F2B544" transparent toneMapped={false} />
       </instancedMesh>
@@ -298,30 +307,39 @@ function Room({ hall, looks }: { hall: Hall; looks: HallLooks }) {
   )
 }
 
-function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallSceneProps, 'hall' | 'focusSeat' | 'resetKey' | 'instant' | 'phone'>) {
+const UP = new THREE.Vector3(0, 1, 0)
+const deg = THREE.MathUtils.degToRad
+// fix15 §15.u rev 3 tilt (up = +): overview looks down to 30° / up to 10°; seat view down 25° / up 20°. Zoom = overview distance ×.
+const TILT_OVERVIEW: [number, number] = [-deg(30), deg(10)], TILT_SEAT: [number, number] = [-deg(25), deg(20)], ZOOM: [number, number] = [0.75, 1.25]
+const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a)) // (-π, π]: Reset never unwinds several turns
+function CameraRig({ hall, focusSeat, resetKey, instant, phone, onFacing }: Pick<HallSceneProps, 'hall' | 'focusSeat' | 'resetKey' | 'instant' | 'phone' | 'onFacing'>) {
   const { camera, gl, invalidate } = useThree()
   const items = useMemo(() => layout(hall), [hall])
   const from = useRef({ pos: new THREE.Vector3(), look: new THREE.Vector3() })
   const to = useRef(overview(hall))
   const look = useRef(overview(hall).look.clone())
   const t = useRef(1)
-  const drag = useRef({ active: false, x: 0, y: 0, yaw: 0, pitch: 0 })
-  const fromDrag = useRef({ yaw: 0, pitch: 0 })
+  const drag = useRef({ active: false, x: 0, y: 0, yaw: 0, pitch: 0, zoom: 1 })
+  const fromDrag = useRef({ yaw: 0, pitch: 0, zoom: 1 })
+  const base = useRef(overview(hall).pos.clone()) // un-zoomed eye; camera = look + (base - look) × zoom
+  const seatView = useRef(false)
+  seatView.current = !!focusSeat
   const t0 = useRef(0)
 
-  useEffect(() => { camera.position.copy(to.current.pos); camera.lookAt(to.current.look) }, [camera])
+  useEffect(() => { camera.position.copy(to.current.pos); base.current.copy(to.current.pos); camera.lookAt(to.current.look) }, [camera])
 
   const go = (target: { pos: THREE.Vector3; look: THREE.Vector3 }) => {
-    from.current = { pos: camera.position.clone(), look: look.current.clone() }
+    from.current = { pos: base.current.clone(), look: look.current.clone() }
+    drag.current.yaw = wrap(drag.current.yaw)
     to.current = target
-    fromDrag.current = { yaw: drag.current.yaw, pitch: drag.current.pitch } // fix12: the drag offset glides back to 0 with the move
+    fromDrag.current = { yaw: drag.current.yaw, pitch: drag.current.pitch, zoom: drag.current.zoom } // fix12: the drag offset glides back to 0 with the move
     t.current = instant ? 1 : 0
     t0.current = -1 // fix12: time-based glide; the 400ms clock starts on the first frame after the click (wall clock, not summed dt)
     drag.current.active = false
     if (instant) {
-      camera.position.copy(target.pos); look.current.copy(target.look); drag.current.yaw = 0; drag.current.pitch = 0
+      base.current.copy(target.pos); camera.position.copy(target.pos); look.current.copy(target.look); drag.current.yaw = 0; drag.current.pitch = 0; drag.current.zoom = 1
       const dir = target.look.clone().sub(target.pos); camera.lookAt(target.look); invalidate()
-      ;(window as Window & { __lumenDrag?: unknown }).__lumenDrag = { yaw: 0, pitch: 0, dx: dir.x, dy: dir.y } // QA hook, same frame
+      ;(window as Window & { __lumenDrag?: unknown }).__lumenDrag = { yaw: 0, pitch: 0, zoom: 1, dx: dir.x, dy: dir.y, dz: dir.z, facing: null, px: target.pos.x, py: target.pos.y, pz: target.pos.z } // QA hook, same frame
     }
   }
   useEffect(() => {
@@ -338,44 +356,68 @@ function CameraRig({ hall, focusSeat, resetKey, instant, phone }: Pick<HallScene
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey])
 
-  // drag to look around (clamped); fix12: stays where released (no spring-back).
-  // fix11 (DESIGN §15, Street View grab): drag right -> hall follows the finger -> camera looks LEFT (yaw +); drag down -> looks UP (pitch +).
-  // yaw used to be subtracted (looked toward the drag) while pitch was grab-style; same handler serves mouse + touch, overview + seat view.
+  // fix15 §15.u rev 3: look around in place. Yaw is unlimited (360°, both views); tilt is clamped per view; zoom (overview only)
+  // moves the eye along its view line 0.75×–1.25×. Grab-style directions as fix11: drag right -> look LEFT (yaw +), drag down -> look UP.
+  // No snap-back / no auto-rotate: only Reset view (or a seat tap / Back) moves the camera.
   useEffect(() => {
     const el = gl.domElement
-    const down = (e: PointerEvent) => { drag.current.active = true; drag.current.x = e.clientX; drag.current.y = e.clientY }
+    const pts = new Map<number, { x: number; y: number }>()
+    let pinch0 = 0, zoom0 = 1
+    const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y) }
+    const down = (e: PointerEvent) => {
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (pts.size === 2) { pinch0 = dist(); zoom0 = drag.current.zoom; drag.current.active = false; return }
+      drag.current.active = true; drag.current.x = e.clientX; drag.current.y = e.clientY
+    }
     const move = (e: PointerEvent) => {
+      if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY })
       const d = drag.current
+      if (pts.size === 2 && pinch0 > 0) { if (!seatView.current) d.zoom = THREE.MathUtils.clamp(zoom0 * pinch0 / Math.max(1, dist()), ZOOM[0], ZOOM[1]); return }
       if (!d.active) return
-      d.yaw = THREE.MathUtils.clamp(d.yaw + (e.clientX - d.x) * 0.004, -0.61, 0.61) // ±35°
-      d.pitch = THREE.MathUtils.clamp(d.pitch + (e.clientY - d.y) * 0.004, -0.26, 0.26) // ±15°
+      const [lo, hi] = seatView.current ? TILT_SEAT : TILT_OVERVIEW
+      d.yaw += (e.clientX - d.x) * 0.004 // unlimited; normalised before any glide
+      d.pitch = THREE.MathUtils.clamp(d.pitch + (e.clientY - d.y) * 0.004, lo, hi)
       d.x = e.clientX; d.y = e.clientY
     }
-    const up = () => { drag.current.active = false }
+    const up = (e: PointerEvent) => { pts.delete(e.pointerId); if (e.pointerType === 'mouse' || e.type !== 'pointerup') pts.clear(); if (pts.size < 2) pinch0 = 0; drag.current.active = false }
+    const wheel = (e: WheelEvent) => { if (seatView.current) return; e.preventDefault(); drag.current.zoom = THREE.MathUtils.clamp(drag.current.zoom * Math.exp(e.deltaY * 0.001), ZOOM[0], ZOOM[1]) }
+    // desktop a11y: ← / → turn 15° per press while the canvas has focus
+    const key = (e: KeyboardEvent) => { if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return; e.preventDefault(); drag.current.yaw += (e.key === 'ArrowLeft' ? 1 : -1) * Math.PI / 12; invalidate() }
+    el.tabIndex = 0; el.setAttribute('aria-label', 'Cinema hall 3D view. Arrow keys turn left and right. [PH]')
+    el.style.touchAction = 'none' // fix15: pinch zoom + 360° drag belong to the hall, not the page
     el.addEventListener('pointerdown', down)
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
-    window.addEventListener('pointercancel', up); el.addEventListener('lostpointercapture', up) // fix11: touch scroll (pan-y) cancels the pointer; without this the drag stuck "active"
-    return () => { el.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); el.removeEventListener('lostpointercapture', up) }
-  }, [gl])
+    window.addEventListener('pointercancel', up); el.addEventListener('lostpointercapture', up as EventListener)
+    el.addEventListener('wheel', wheel, { passive: false }); el.addEventListener('keydown', key)
+    return () => { el.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); el.removeEventListener('lostpointercapture', up); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', key) }
+  }, [gl, invalidate])
 
-  useFrame((_, dt) => {
+  const facing = useRef<'left' | 'right' | null>(null)
+  useFrame(() => {
+    const d = drag.current
     if (t.current < 1) {
-      // fix12/13: 400ms ease-out glide (tap -> seat view, Back to overview, Reset view); instant under reduced motion (see go())
+      // fix12/13/15: 400ms ease-out glide (seat tap, Back, Reset); instant under reduced motion (see go()). Yaw was normalised in go(): short way round.
       if (t0.current < 0) t0.current = performance.now()
       t.current = Math.min(1, (performance.now() - t0.current) / 400)
       const k = 1 - (1 - t.current) ** 3 // ease-out cubic
-      camera.position.lerpVectors(from.current.pos, to.current.pos, k)
+      base.current.lerpVectors(from.current.pos, to.current.pos, k)
       look.current.lerpVectors(from.current.look, to.current.look, k)
-      if (!drag.current.active) { drag.current.yaw = fromDrag.current.yaw * (1 - k); drag.current.pitch = fromDrag.current.pitch * (1 - k) }
+      if (!d.active) { d.yaw = fromDrag.current.yaw * (1 - k); d.pitch = fromDrag.current.pitch * (1 - k); d.zoom = 1 + (fromDrag.current.zoom - 1) * (1 - k) }
     }
-    const d = drag.current
-    // fix12: no spring-back. After a drag the view stays where the user left it (no automatic camera move after drag/zoom).
-    const dir = look.current.clone().sub(camera.position)
-    dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), d.yaw)
-    dir.y += d.pitch * dir.length()
+    const z = seatView.current ? 1 : d.zoom
+    camera.position.copy(look.current).addScaledVector(look.current.clone().sub(base.current), -z)
+    const dir = look.current.clone().sub(base.current)
+    dir.applyAxisAngle(UP, d.yaw)
+    const right = dir.clone().cross(UP).normalize()
+    dir.applyAxisAngle(right, d.pitch)
     camera.lookAt(camera.position.clone().add(dir))
-    ;(window as Window & { __lumenDrag?: { yaw: number; pitch: number; dx: number; dy: number } }).__lumenDrag = { yaw: d.yaw, pitch: d.pitch, dx: dir.x, dy: dir.y } // QA hook
+    // §15.u rev 3 screen hint: which side the screen is on once it is more than 90° off-centre
+    const tgt = SCREEN_CENTER.clone().sub(camera.position)
+    const a = Math.atan2(dir.z * tgt.x - dir.x * tgt.z, dir.x * tgt.x + dir.z * tgt.z)
+    const f = Math.abs(a) > Math.PI / 2 ? (a > 0 ? 'left' : 'right') : null
+    if (f !== facing.current) { facing.current = f; onFacing?.(f) }
+    ;(window as Window & { __lumenDrag?: unknown }).__lumenDrag = { yaw: d.yaw, pitch: d.pitch, zoom: z, dx: dir.x, dy: dir.y, dz: dir.z, facing: f, px: camera.position.x, py: camera.position.y, pz: camera.position.z } // QA hook
   })
   return null
 }
@@ -474,7 +516,7 @@ export default function HallScene3D(p: HallSceneProps & { onReady?: () => void; 
       {built && <Seats {...p} looks={looks} low={low} still={p.instant} />}
       <FirstFrame onReady={p.onReady} />
       {built && !compiled && <Warmup onDone={() => setCompiled(true)} />}
-      <CameraRig hall={p.hall} focusSeat={p.focusSeat} resetKey={p.resetKey} instant={p.instant} phone={p.phone} />
+      <CameraRig hall={p.hall} focusSeat={p.focusSeat} resetKey={p.resetKey} instant={p.instant} phone={p.phone} onFacing={p.onFacing} />
     </Canvas>
     </div>
   )

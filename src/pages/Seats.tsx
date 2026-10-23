@@ -51,6 +51,7 @@ export default function SeatsPage() {
   const [shake, setShake] = useState<string | null>(null)
   const [limitMsg, setLimitMsg] = useState(false)
   const [resetKey, setResetKey] = useState(0)
+  const [facing, setFacing] = useState<'left' | 'right' | null>(null) // fix15 §15.u rev 3 Screen chip
   // fix11 §15.y rev 3/3.1 group picking. partySize lives in booking state (the §13 tickets step will set it later).
   const qParty = Number(q.get('party')) || 0 // ?party=N presets the group size and skips step 1 (deep links / QA)
   const [partyStep, setPartyStep] = useState(() => !qParty && booking.seats.length === 0)
@@ -317,13 +318,20 @@ export default function SeatsPage() {
             <GLBoundary onError={() => setLostNote('3D view unavailable, showing simple view')}>
               <Suspense fallback={null}>
                                   <HallScene3D hall={map.data.hall} taken={taken} selected={selected} focusSeat={focusSeat} hovered={hovered}
-                    preview={focusSeat} onPick={viewSeat} onHover={setHovered} resetKey={resetKey} phone={isPhone()} instant={prefersReducedMotion()}
+                    preview={focusSeat} onPick={viewSeat} onHover={setHovered} resetKey={resetKey} onFacing={setFacing} phone={isPhone()} instant={prefersReducedMotion()}
                     onContextLost={() => { if (!leaving3D.current) setLostNote('3D view paused, showing simple view') }}
                   paused={curtain === 'opening'} applyLooks={curtain === 'gone'} fpsGuard={fpsGuard} fpsForceSlow={fpsSlow} onStillSlow={slowToast}
                   onReady={() => { performance.mark('lumen:hall-ready'); setThreeReady(true) }} />
               </Suspense>
             </GLBoundary>
           </div>
+        )}
+        {threeOn && threeReady && !lostNote && (
+          <button type="button" data-screen-chip={facing ?? 'hidden'} onClick={() => setResetKey((k) => k + 1)} aria-hidden={!facing} tabIndex={facing ? 0 : -1}
+            className={cn('absolute top-1/2 z-10 h-8 -translate-y-1/2 rounded-full bg-black/60 px-3 text-xs text-white', facing === 'right' ? 'right-3' : 'left-3',
+              !reduceMotion && 'transition-opacity duration-150', facing ? 'opacity-100' : 'pointer-events-none opacity-0')}>
+            {facing === 'left' ? '‹ Screen' : 'Screen ›'} <span className="sr-only">[PH] turn back to the screen</span>
+          </button>
         )}
         {threeOn && threeReady && !lostNote && (
           <p data-view={focusSeat?.id ?? 'overview'} className="absolute bottom-20 left-3 rounded-full bg-bg/80 px-3 py-1 text-xs ring-1 ring-border md:bottom-4" aria-live="polite">

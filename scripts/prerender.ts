@@ -40,7 +40,9 @@ for (const m of mod.__static.movies() as { id: string; title: string }[]) {
   const data = { [`movie:${m.id}`]: m }
   // static overlay lives OUTSIDE #root (React never replaces it), so it is the first, early LCP candidate; Seats.tsx removes it
   // when the real curtains are gone (equal-size React curtains painted later are not a new, larger LCP candidate)
-  const out = template.replace('<!--head-->', seatsHead) // fix12 (SEO): seat pages preload Inter too.replace('<div id="root"><!--app--></div>', overlay + '<div id="root"></div>').replace('</body>', `<script>window.__DATA__=${JSON.stringify(data).replace(/</g, '\\u003c')}</script>\n  </body>`)
+  // fix15: fix12 put a `//` comment mid-chain, which silently dropped the static overlay + window.__DATA__ from every seat page
+  // (so LCP waited for React and fix13's CLS reserve never shipped). Seat pages keep the Inter preload (fix12).
+  const out = template.replace('<!--head-->', seatsHead).replace('<div id="root"><!--app--></div>', overlay + '<div id="root"></div>').replace('</body>', `<script>window.__DATA__=${JSON.stringify(data).replace(/</g, '\\u003c')}</script>\n  </body>`)
   const file = path.join(dist, `movie/${m.id}/seats/index.html`)
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, out)
 }

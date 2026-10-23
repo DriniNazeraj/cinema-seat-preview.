@@ -21,8 +21,11 @@ async function tap(p, id, touch) {
   const { width: W, height: H } = p.viewportSize(), bad = (q) => !q || q.x < 16 || q.y < 60 || q.x > W - 16 || q.y > H - 70
   let xy = await p.evaluate((id) => window.__lumenSeatXY(id), id)
   // fix13: a seat outside the frame is reached like a visitor would: drag to look around, then tap
-  for (const [dx, dy] of [[160, 0], [-160, 0], [160, -70], [-160, -70], [0, -70], [160, 70], [-160, 70]]) {
+  // fix15: with 360° yaw, tilt-down and 1.25× zoom-out the phone corners (incl. access J15/J16) are reachable too
+  for (const [dx, dy, zoom] of [[160, 0], [-160, 0], [160, -70], [-160, -70], [0, -70], [160, 70], [-160, 70],
+    [0, 0, 1], [0, -70, 1], [0, -130, 1], [160, -130, 1], [-160, -130, 1], [100, -100, 1], [-100, -100, 1], [220, -60, 1], [-220, -60, 1]]) {
     if (!bad(xy)) break
+    if (zoom) { await p.mouse.move(W / 2, H / 2); await p.mouse.wheel(0, 400); await p.waitForTimeout(150) }
     await p.mouse.move(W / 2, H / 2); await p.mouse.down(); await p.mouse.move(W / 2 + dx, H / 2 + dy, { steps: 6 }); await p.mouse.up(); await p.waitForTimeout(400)
     xy = await p.evaluate((id) => window.__lumenSeatXY(id), id)
     if (bad(xy)) { await p.getByRole('button', { name: 'Reset view' }).click({ timeout: 2000 }).catch(() => {}); await p.waitForTimeout(500) }
