@@ -10,6 +10,8 @@ type Ctx = State & {
   clear: () => void
   setSeats: (ids: string[]) => void
   setPartySize: (n: number) => void
+  /** fix16.1: change the count, keep picks; lowering below the picks drops the most recent ones */
+  resizeParty: (n: number) => void
   setHold: (id: string, until: number) => void
   releaseHold: () => void
   setLastRef: (ref: string) => void
@@ -31,6 +33,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     startHold: () => set((p) => ({ ...p, holdUntil: p.holdUntil && p.holdUntil > Date.now() ? p.holdUntil : Date.now() + HOLD_SECONDS * 1000 })),
     setSeats: (ids) => set((p) => ({ ...p, seats: ids })),
     setPartySize: (n) => set((p) => ({ ...p, partySize: Math.min(8, Math.max(1, n)), seats: [] })),
+    resizeParty: (n) => set((p) => { const size = Math.min(8, Math.max(1, n)); return { ...p, partySize: size, seats: p.seats.slice(0, size) } }),
     setHold: (id, until) => set((p) => ({ ...p, holdId: id, holdUntil: until })),
     // DELETE /api/holds/:id (mock) when a hold exists; nothing is held before Continue
     releaseHold: () => set((p) => { if (p.holdId) void import('./api').then((m) => m.releaseHoldApi(p.holdId!)); return { ...p, holdId: null, holdUntil: null } }),

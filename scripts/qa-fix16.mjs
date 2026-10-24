@@ -16,7 +16,7 @@ for (const dev of ['phone', 'desktop']) {
   chk(`${dev}: step is ${ph ? 'dialog sheet' : 'inline (no dialog)'}`, ph ? (await step.getAttribute('role')) === 'dialog' : (await p.locator('[role=dialog]').count()) === 0)
   chk(`${dev}: default 2`, (await p.locator('[data-party-value]').innerText()).startsWith('2'))
   chk(`${dev}: group labelled`, (await p.getByRole('group', { name: 'Number of seats' }).count()) === 1)
-  const plus = p.getByRole('button', { name: 'More seats' }), minus = p.getByRole('button', { name: 'Fewer seats' })
+  const plus = p.getByRole('button', { name: 'More seats [PH]', exact: true }), minus = p.getByRole('button', { name: 'Fewer seats [PH]', exact: true })
   const bx = await plus.boundingBox(); chk(`${dev}: 44px buttons`, bx.width >= 44 && bx.height >= 44, `${bx.width}x${bx.height}`)
   if (ph) {
     // focus trap: Tab many times, focus stays inside; Esc closes and returns focus to the pill
@@ -47,11 +47,44 @@ for (const dev of ['phone', 'desktop']) {
   const anim = await chip.evaluate((e) => getComputedStyle(e).animationName)
   chk(`${dev}: deep link -> 2 seats + pulse`, /2 seats ▾/.test(await chip.innerText()) && (await chip.getAttribute('data-pulse')) === '1' && anim === 'chip-pulse', anim)
   chk(`${dev}: no popup on deep link`, (await p.getByText(/How many/).count()) === 0)
-  await chip.click(); await p.locator('[data-party-chip-panel]').waitFor()
-  await p.locator('[data-party-chip-panel]').getByRole('button', { name: 'More seats' }).click()
-  chk(`${dev}: chip changes count in place`, /3 seats ▾/.test(await chip.innerText()) && new URL(p.url()).searchParams.get('party') === '3' && (await p.locator('canvas, [data-viewswitch]').count()) > 0)
-  await p.keyboard.press('Escape'); await p.waitForTimeout(200)
-  chk(`${dev}: Esc closes chip panel`, (await p.locator('[data-party-chip-panel]').count()) === 0)
+  // fix16.1 draft: +/- change only the draft; Esc cancels (focus on a stepper button, then focus on body); Done applies
+  const cpanel = p.locator('[data-party-chip-panel]')
+  const sheetUp = () => p.evaluate(() => !!document.querySelector('[data-party-chip]'))
+  for (const where of ['stepper', 'body']) {
+    await chip.click(); await cpanel.waitFor()
+    await cpanel.getByRole('button', { name: 'More seats [PH]', exact: true }).click()
+    const draftOnly = /2 seats ▾/.test(await chip.innerText()) && new URL(p.url()).searchParams.get('party') === null
+    if (where === 'body') await p.evaluate(() => { document.activeElement?.blur() })
+    await p.keyboard.press('Escape'); await p.waitForTimeout(300)
+    chk(`${dev}: Esc (${where}) cancels draft, closes panel, focus chip, sheet open`, draftOnly && (await cpanel.count()) === 0 && await sheetUp() &&
+      /2 seats ▾/.test(await chip.innerText()) && await p.evaluate(() => document.activeElement?.hasAttribute('data-party-chip')))
+  }
+  await chip.click(); await cpanel.waitFor(); await cpanel.getByRole('button', { name: 'More seats [PH]', exact: true }).click()
+  await cpanel.locator('[data-party-done]').click(); await p.waitForTimeout(200)
+  chk(`${dev}: Done applies the draft in place`, /3 seats ▾/.test(await chip.innerText()) && new URL(p.url()).searchParams.get('party') === '3' && (await cpanel.count()) === 0 && (await p.locator('canvas, [data-viewswitch]').count()) > 0)
+  // fix16.1: chip keeps picks. party 5 (simple view) -> place a group -> 5 down to 3 keeps the first 3 -> back up to 5 keeps all 3
+  await p.goto(base + `/movie/iron-orchard/seats?show=${encodeURIComponent(sid)}&party=5&simple=1`)
+  await p.waitForSelector('[data-party-chip]', { timeout: 30000 })
+  const cart = () => p.evaluate(() => JSON.parse(sessionStorage.getItem('lumen.cart') ?? '{}'))
+  for (let i = 0; i < 40 && (await cart()).seats?.length !== 5; i++) { await p.locator('[data-seat][aria-label*="free"]').nth(i * 3).click(); await p.waitForTimeout(250) }
+  const five = (await cart()).seats ?? []
+  chk(`${dev}: placed 5`, five.length === 5, five.join(','))
+  const c2 = p.locator('[data-party-chip]')
+  if (!(await c2.isVisible())) await p.locator('[aria-label*="Open seat picker"]').click()
+  await c2.click()
+  const panel = p.locator('[data-party-chip-panel]')
+  await panel.getByRole('button', { name: 'Fewer seats [PH]', exact: true }).click(); await panel.getByRole('button', { name: 'Fewer seats [PH]', exact: true }).click(); await p.waitForTimeout(200)
+  chk(`${dev}: draft does not touch picks`, JSON.stringify((await cart()).seats) === JSON.stringify(five) && new URL(p.url()).searchParams.get('party') === '5')
+  await panel.locator('[data-party-done]').click(); await p.waitForTimeout(200)
+  const three = (await cart()).seats ?? [], say = await p.locator('[data-say]').innerText()
+  chk(`${dev}: 5 -> 3 keeps first 3 in pick order`, JSON.stringify(three) === JSON.stringify(five.slice(0, 3)) && /3 seats ▾/.test(await c2.innerText()), three.join(','))
+  chk(`${dev}: url party=3 + polite announcement`, new URL(p.url()).searchParams.get('party') === '3' && (await p.locator('[data-say]').getAttribute('aria-live')) === 'polite' && /3 seats, removed A\w+, A\w+, 3 of 3 picked/.test(say), say)
+  await c2.click(); await panel.waitFor()
+  await panel.getByRole('button', { name: 'More seats [PH]', exact: true }).click(); await panel.getByRole('button', { name: 'More seats [PH]', exact: true }).click()
+  await panel.locator('[data-party-done]').click(); await p.waitForTimeout(200)
+  const up = (await cart()).seats ?? []
+  chk(`${dev}: 3 -> 5 keeps every pick`, JSON.stringify(up) === JSON.stringify(three) && new URL(p.url()).searchParams.get('party') === '5' && /3 of 5 picked/.test(await p.locator('[data-say]').innerText()), up.join(','))
+  chk(`${dev}: no hold left on dropped seats`, !(await cart()).holdId)
   await ctx.close()
 }
 // reduced motion: no pulse

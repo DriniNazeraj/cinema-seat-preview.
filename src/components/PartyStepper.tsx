@@ -17,11 +17,11 @@ export function PartyStepper({ value, onChange, className }: { value: number; on
   return (
     <div role="group" aria-labelledby={id} data-party-stepper onKeyDown={onKey} className={cn('flex items-center gap-4', className)}>
       <span id={id} className="sr-only">Number of seats</span>
-      <button type="button" className={btn} aria-label="Fewer seats" disabled={value <= 1} onClick={() => set(value - 1)}><Minus className="size-5" aria-hidden /></button>
+      <button type="button" className={btn} aria-label="Fewer seats [PH]" disabled={value <= 1} onClick={() => set(value - 1)}><Minus className="size-5" aria-hidden /></button>
       <output data-party-value aria-live="polite" aria-atomic="true" className="min-w-16 text-center text-3xl font-semibold tabular-nums">
         {value}<span className="sr-only">{value === 1 ? ' seat' : ' seats'}</span>
       </output>
-      <button type="button" className={btn} aria-label="More seats" disabled={value >= MAX_SEATS} onClick={() => set(value + 1)}><Plus className="size-5" aria-hidden /></button>
+      <button type="button" className={btn} aria-label="More seats [PH]" disabled={value >= MAX_SEATS} onClick={() => set(value + 1)}><Plus className="size-5" aria-hidden /></button>
     </div>
   )
 }

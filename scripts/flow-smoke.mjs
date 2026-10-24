@@ -1,10 +1,14 @@
 import { chromium } from 'playwright'
 const b = await chromium.launch({ args: ['--disable-3d-apis'] }); const p = await b.newPage(); const errs=[]
 p.on('pageerror', e => errs.push(e.message))
-await p.goto('http://localhost:4174/movie/neon-alley')
-await p.locator('main section button:not([disabled]):has-text("€")').first().click(); await p.waitForURL(/seats/)
-// fix11 §15.y: step 1 'How many people?' (default 2) -> Choose seats; tap places the block; Change seats clears; keyboard Enter places again
-await p.getByRole('button', { name: /Choose seats/ }).last().click()
+await p.goto(`http://localhost:${process.env.PORT ?? 4174}/movie/neon-alley`)
+// fix16 §15.t: showtime -> 'How many seats?' (default 2) -> Choose seats -> ?party=2; tap places the block; Change seats clears; keyboard Enter places again
+await p.locator('main section button:not([disabled]):has-text("€")').first().click()
+await p.locator('[data-party-step]').waitFor()
+if (!(await p.locator('[data-party-value]').innerText()).startsWith('2')) throw new Error('party step default is not 2')
+await p.locator('[data-choose-seats]').click(); await p.waitForURL(/seats\?.*party=2/)
+if (await p.getByText(/How many/).count()) throw new Error('party popup still on the seats page')
+await p.getByRole('button', { name: /Choose seats/ }).last().click().catch(() => {}) // curtain button, if still up
 await p.locator('[data-seat][aria-label*="free"]').nth(5).click()
 await p.getByRole('button', { name: 'Change seats' }).click()
 await p.locator('[data-seat][aria-label*="free"]').nth(5).press('ArrowRight')

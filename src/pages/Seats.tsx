@@ -65,14 +65,25 @@ export default function SeatsPage() {
   const validParty = qParty >= 1 && qParty <= MAX_SEATS
   const [chipPulse] = useState(() => !validParty && booking.seats.length === 0 && !prefersReducedMotion())
   const [chipOpen, setChipOpen] = useState(false)
+  const [draft, setDraft] = useState(2) // fix16.1: the chip stepper edits a draft; only Done applies it
+  const chipRef = useRef<HTMLButtonElement>(null)
+  function openChip() { setDraft(booking.partySize); setChipOpen(true) }
+  /** cancel (Esc, chip toggle): party stays as it was when the panel opened; focus back on the chip, sheet stays open */
+  function closeChip() { setChipOpen(false); requestAnimationFrame(() => chipRef.current?.focus()) }
   useEffect(() => {
     const want = validParty ? qParty : booking.seats.length ? booking.partySize : 2
     if (booking.partySize !== want) booking.setPartySize(want)
   }, [qParty]) // eslint-disable-line react-hooks/exhaustive-deps
-  /** the header chip is the only way to change the count; keeps the hall view, clears picks (§15.y), mirrors ?party */
+  /** the header chip is the only way to change the count; keeps the hall view. fix16.1: picks are kept (lowering drops the
+   *  most recent ones), a hold on dropped seats is released, ?party mirrors the count, and the change is announced politely. */
   function changeParty(n: number) {
-    needG(); clearPicks(); booking.setPartySize(n)
-    const u = new URL(location.href); u.searchParams.set('party', String(n))
+    needG()
+    const size = Math.min(MAX_SEATS, Math.max(1, n)), kept = selected.slice(0, size), dropped = selected.slice(size)
+    if (dropped.length && booking.holdId) booking.releaseHold()
+    booking.resizeParty(size); setShortK(null); setLimitMsg(false)
+    setSplit(kept.length > 0 && kept.length < size) // raised over a placed group: add the rest one at a time (§15.y split)
+    setSay(`${size} ${size === 1 ? 'seat' : 'seats'}${dropped.length ? `, removed ${dropped.join(', ')}` : ''}${kept.length ? `, ${kept.length} of ${size} picked` : ''} [PH]`)
+    const u = new URL(location.href); u.searchParams.set('party', String(size))
     history.replaceState(history.state, '', u.pathname + u.search + u.hash)
   }
   const [split, setSplit] = useState(false)          // "Split the group": taps add one seat at a time until partySize
@@ -289,7 +300,7 @@ export default function SeatsPage() {
       } else toast("Couldn't reach the cinema, try again [PH]")
     } finally { setHolding(false) }
   }
-  const noRun = !!G && !!map.data && chipOpen && G.rowsWithRun(map.data.hall, party, taken).length === 0
+  const noRun = !!G && !!map.data && chipOpen && G.rowsWithRun(map.data.hall, draft, taken).length === 0
   const ghost = !split && hover2D && map.data && !selected.includes(hover2D.id) && !taken.has(hover2D.id) && G ? new Set(G.placeGroup(map.data.hall, hover2D, party, taken).ids) : undefined
   const groupLabel = !selected.length ? 'Pick a seat for your group [PH]' : selected.length < party ? `${selected.length} of ${party} picked [PH]` : `${rangeLabel(selected, seatsById).replace(' to ', '-')} · ${selected.length} seat${selected.length === 1 ? '' : 's'} [PH]`
 
@@ -424,7 +435,7 @@ export default function SeatsPage() {
         </div>
       )}
 
-      <SeatSheet open={sheetOpen && !curtainsUp} onCollapse={() => setSheetOpen(false)} title="Choose your seats" footer={(
+      <SeatSheet onEscape={(e) => { if (chipOpen) { e.preventDefault(); closeChip() } }} open={sheetOpen && !curtainsUp} onCollapse={() => setSheetOpen(false)} title="Choose your seats" footer={(
         <div className="flex items-center justify-between gap-3">
           <p className="min-w-0 flex-1 truncate text-sm"><span data-card className="font-semibold">{seatLabel}</span>{selected.length > 0 && <> · {eur(total)} [PH]</>}</p>
           {!split && selected.length === party && <ShiftButtons onShift={shift} canL={!!shiftL} canR={!!shiftR} />}
@@ -442,7 +453,7 @@ export default function SeatsPage() {
               </div>
             )}
             <div className="mb-3 flex items-center justify-between gap-2">
-              <button type="button" data-party-chip aria-expanded={chipOpen} aria-controls="party-chip-panel" onClick={() => setChipOpen((o) => !o)}
+              <button ref={chipRef} type="button" data-party-chip aria-expanded={chipOpen} aria-controls="party-chip-panel" onClick={() => (chipOpen ? closeChip() : openChip())}
                 className={cn('inline-flex min-h-11 items-center gap-1.5 rounded-full bg-surface-2 px-4 text-sm ring-1 ring-border hover:bg-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent', chipPulse && 'motion-safe:animate-chip-pulse')}
                 data-pulse={chipPulse ? '1' : undefined}>
                 <Users className="size-4" aria-hidden /> {party} {party === 1 ? 'seat' : 'seats'} ▾<span className="sr-only">, change number of seats</span>
@@ -451,11 +462,10 @@ export default function SeatsPage() {
               {split && selected.length < party && <p className="text-sm text-text-muted">{selected.length} of {party} picked [PH]</p>}
             </div>
             {chipOpen && (
-              <div id="party-chip-panel" data-party-chip-panel className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-surface-2 p-3 ring-1 ring-border"
-                onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setChipOpen(false); (document.querySelector('[data-party-chip]') as HTMLElement | null)?.focus() } }}>
-                <PartyStepper value={party} onChange={changeParty} />
-                <Button variant="ghost" className="min-h-11" onClick={() => { setChipOpen(false); setSay(`Pick a seat for your group of ${party} [PH]`) }}>Done [PH]</Button>
-                {noRun && <p className="w-full text-sm text-text-muted">No {party} seats together, we'll help you split [PH]</p>}
+              <div id="party-chip-panel" data-party-chip-panel className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-surface-2 p-3 ring-1 ring-border">
+                <PartyStepper value={draft} onChange={(n) => { needG(); setDraft(n) }} />
+                <Button variant="ghost" data-party-done className="min-h-11" onClick={() => { if (draft !== party) changeParty(draft); closeChip() }}>Done [PH]</Button>
+                {noRun && <p className="w-full text-sm text-text-muted">No {draft} seats together, we'll help you split [PH]</p>}
               </div>
             )}
             {shortK !== null && <ShortPanel k={shortK} party={party} onFind={findTogether} onSplit={startSplit} />}
