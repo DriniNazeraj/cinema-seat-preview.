@@ -19,6 +19,7 @@ import { SeatSheet } from '@/components/SeatSheet'
 import { resetSeatMapZoom, SeatLegend, SeatMap2D } from '@/components/SeatMap2D'
 import { StepIndicator } from '@/components/Shows'
 import { ViewFromSeatCard } from '@/components/ViewFromSeatCard'
+import { PartyStepper } from '@/components/PartyStepper'
 
 const HallScene3D = lazy(() => import('@/three/HallScene3D'))
 
@@ -59,9 +60,21 @@ export default function SeatsPage() {
   const [resetKey, setResetKey] = useState(0)
   const [facing, setFacing] = useState<'left' | 'right' | null>(null) // fix15 §15.u rev 3 Screen chip
   // fix11 §15.y rev 3/3.1 group picking. partySize lives in booking state (the §13 tickets step will set it later).
-  const qParty = Number(q.get('party')) || 0 // ?party=N presets the group size and skips step 1 (deep links / QA)
-  const [partyStep, setPartyStep] = useState(() => !qParty && booking.seats.length === 0)
-  useEffect(() => { if (qParty >= 1 && qParty <= MAX_SEATS && booking.partySize !== qParty) booking.setPartySize(qParty) }, [qParty]) // eslint-disable-line react-hooks/exhaustive-deps
+  // fix16 §15.t: party size is chosen on the movie page (?party=N). No popup here; no party in the URL -> 2 + one chip pulse.
+  const qParty = Number(q.get('party')) || 0
+  const validParty = qParty >= 1 && qParty <= MAX_SEATS
+  const [chipPulse] = useState(() => !validParty && booking.seats.length === 0 && !prefersReducedMotion())
+  const [chipOpen, setChipOpen] = useState(false)
+  useEffect(() => {
+    const want = validParty ? qParty : booking.seats.length ? booking.partySize : 2
+    if (booking.partySize !== want) booking.setPartySize(want)
+  }, [qParty]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** the header chip is the only way to change the count; keeps the hall view, clears picks (§15.y), mirrors ?party */
+  function changeParty(n: number) {
+    needG(); clearPicks(); booking.setPartySize(n)
+    const u = new URL(location.href); u.searchParams.set('party', String(n))
+    history.replaceState(history.state, '', u.pathname + u.search + u.hash)
+  }
   const [split, setSplit] = useState(false)          // "Split the group": taps add one seat at a time until partySize
   const [shortK, setShortK] = useState<number | null>(null) // "Only k seats together here" panel
   const [pulseRows, setPulseRows] = useState<Set<string> | undefined>()
@@ -276,7 +289,7 @@ export default function SeatsPage() {
       } else toast("Couldn't reach the cinema, try again [PH]")
     } finally { setHolding(false) }
   }
-  const noRun = !!G && !!map.data && partyStep && G.rowsWithRun(map.data.hall, party, taken).length === 0
+  const noRun = !!G && !!map.data && chipOpen && G.rowsWithRun(map.data.hall, party, taken).length === 0
   const ghost = !split && hover2D && map.data && !selected.includes(hover2D.id) && !taken.has(hover2D.id) && G ? new Set(G.placeGroup(map.data.hall, hover2D, party, taken).ids) : undefined
   const groupLabel = !selected.length ? 'Pick a seat for your group [PH]' : selected.length < party ? `${selected.length} of ${party} picked [PH]` : `${rangeLabel(selected, seatsById).replace(' to ', '-')} · ${selected.length} seat${selected.length === 1 ? '' : 's'} [PH]`
 
@@ -411,29 +424,14 @@ export default function SeatsPage() {
         </div>
       )}
 
-      <SeatSheet open={sheetOpen && !curtainsUp} onCollapse={() => setSheetOpen(false)} title={partyStep ? 'How many people? [PH]' : 'Choose your seats'} footer={partyStep ? (
-        <Button className="min-h-11 w-full" onClick={() => { setPartyStep(false); setSay(`Pick a seat for your group of ${party} [PH]`) }}>Choose seats [PH]</Button>
-      ) : (
+      <SeatSheet open={sheetOpen && !curtainsUp} onCollapse={() => setSheetOpen(false)} title="Choose your seats" footer={(
         <div className="flex items-center justify-between gap-3">
           <p className="min-w-0 flex-1 truncate text-sm"><span data-card className="font-semibold">{seatLabel}</span>{selected.length > 0 && <> · {eur(total)} [PH]</>}</p>
           {!split && selected.length === party && <ShiftButtons onShift={shift} canL={!!shiftL} canR={!!shiftR} />}
           <Button className="min-h-11" disabled={selected.length !== party || holding} onClick={goContinue}>Continue</Button>
         </div>
       )}>
-        {partyStep ? (
-          <fieldset data-party-step>
-            <legend className="sr-only">How many people? [PH]</legend>
-            <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
-              {Array.from({ length: MAX_SEATS }, (_, i) => i + 1).map((n) => (
-                <label key={n} className="relative">
-                  <input type="radio" name="party" value={n} checked={party === n} onChange={() => { needG(); booking.setPartySize(n) }} className="peer sr-only" />
-                  <span className="grid min-h-11 cursor-pointer place-items-center rounded-xl bg-surface-2 text-xl font-semibold tabular-nums ring-1 ring-border peer-checked:bg-accent peer-checked:text-accent-fg peer-focus-visible:ring-2 peer-focus-visible:ring-accent">{n}</span>
-                </label>
-              ))}
-            </div>
-            <p className="mt-3 min-h-5 text-sm text-text-muted">{noRun ? `No ${party} seats together, we'll help you split [PH]` : ''}</p>
-          </fieldset>
-        ) : !map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-10 sm:h-6" />)}</div> : (
+        {!map.data ? <div className="space-y-2">{Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="h-10 sm:h-6" />)}</div> : (
           <>
             {/* fix13 designer ruling: sheet open + 3D seat view -> the sheet's top row is the peek content (no second bar) */}
             {focusSeat && threeOn && !lostNote && !(party === 1 && selected.includes(focusSeat.id)) && (
@@ -444,13 +442,22 @@ export default function SeatsPage() {
               </div>
             )}
             <div className="mb-3 flex items-center justify-between gap-2">
-              <button type="button" data-party-chip onClick={() => { clearPicks(); setPartyStep(true) }} 
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-surface-2 px-4 text-sm ring-1 ring-border hover:bg-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-                <Users className="size-4" aria-hidden /> {party} {party === 1 ? 'person' : 'people'} [PH]<span className="sr-only">, change group size</span>
+              <button type="button" data-party-chip aria-expanded={chipOpen} aria-controls="party-chip-panel" onClick={() => setChipOpen((o) => !o)}
+                className={cn('inline-flex min-h-11 items-center gap-1.5 rounded-full bg-surface-2 px-4 text-sm ring-1 ring-border hover:bg-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent', chipPulse && 'motion-safe:animate-chip-pulse')}
+                data-pulse={chipPulse ? '1' : undefined}>
+                <Users className="size-4" aria-hidden /> {party} {party === 1 ? 'seat' : 'seats'} ▾<span className="sr-only">, change number of seats</span>
               </button>
               {!selected.length && <p data-pick-prompt className="text-sm text-text-muted">Pick a seat for your group [PH]</p>}
               {split && selected.length < party && <p className="text-sm text-text-muted">{selected.length} of {party} picked [PH]</p>}
             </div>
+            {chipOpen && (
+              <div id="party-chip-panel" data-party-chip-panel className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-surface-2 p-3 ring-1 ring-border"
+                onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setChipOpen(false); (document.querySelector('[data-party-chip]') as HTMLElement | null)?.focus() } }}>
+                <PartyStepper value={party} onChange={changeParty} />
+                <Button variant="ghost" className="min-h-11" onClick={() => { setChipOpen(false); setSay(`Pick a seat for your group of ${party} [PH]`) }}>Done [PH]</Button>
+                {noRun && <p className="w-full text-sm text-text-muted">No {party} seats together, we'll help you split [PH]</p>}
+              </div>
+            )}
             {shortK !== null && <ShortPanel k={shortK} party={party} onFind={findTogether} onSplit={startSplit} />}
             <SeatMap2D key={mapKey} preview={ghost} pulseRows={pulseRows} onShift={shift} hall={map.data.hall} taken={taken} selected={selected} price={price} onPick={pick} onHover={(s) => { needG(); setHover2D(s); setHovered(s) }} shakeId={shake} compact={false} />
             <div className="mt-4"><SeatLegend /></div>
@@ -461,7 +468,7 @@ export default function SeatsPage() {
         )}
       </SeatSheet>
       {/* peek bar: sheet collapsed, never fully hidden. Reserved h-16, fixed bottom. */}
-      {!sheetOpen && !curtainsUp && (!partyStep || focusSeat) && (
+      {!sheetOpen && !curtainsUp && (
         <div className="fixed inset-x-0 bottom-0 z-[55] flex h-16 items-center gap-2 border-t border-border bg-surface/95 px-3 backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:w-[min(480px,40vw)] md:rounded-2xl md:ring-1 md:ring-border">
           {focusSeat && threeOn && !lostNote && !(party === 1 && selected.includes(focusSeat.id)) ? <>
             <button ref={peekRef} data-seatview={focusSeat.id} onClick={() => setSheetOpen(true)} className="min-h-11 min-w-0 flex-1 text-left text-sm leading-tight" aria-label={`Seat ${focusSeat.id}, row ${focusSeat.row}, ${eur(price)}. Open seat picker`}>

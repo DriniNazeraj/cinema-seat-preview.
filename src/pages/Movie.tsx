@@ -9,12 +9,15 @@ import { dayKey, dayLabel } from '@/lib/format'
 import { Button, Container, ErrorCard, PH, Skeleton } from '@/components/ui'
 import { Poster } from '@/components/Poster'
 import { ShowtimePill } from '@/components/Shows'
+import { PARTY_STEP_ID, PartySizeStep, useIsDesktop } from '@/components/PartySizeStep'
 
 export default function MoviePage() {
   const { id = '' } = useParams()
   const movie = useData(`movie:${id}`, () => getMovie(id))
   const shows = useData(`shows:${id}`, () => listShows({ movieId: id }))
   const [trailer, setTrailer] = useState(false)
+  const [picked, setPicked] = useState<Show | null>(null) // fix16 §15.t: showtime -> "How many seats?" step
+  const desktop = useIsDesktop()
   // §13 prefetch: warm the 3D chunk + velvet tile while the visitor picks a showtime (link prefetch only)
   useEffect(() => { prefetchHall3D() }, [])
   useEffect(() => { if (typeof location !== 'undefined' && location.hash === '#trailer') setTrailer(true) }, [])
@@ -60,9 +63,13 @@ export default function MoviePage() {
               <section key={d} aria-label={dayLabel(d + 'T12:00:00')}>
                 <h3 className="mb-2 text-xl">{dayLabel(d + 'T12:00:00')}</h3>
                 {[...formats.entries()].map(([f, list]) => (
-                  <div key={f} className="mb-3 flex flex-wrap items-center gap-2">
-                    <span className="w-14 rounded-full bg-surface-2 px-2 py-1 text-center text-xs font-semibold">{f}{f === 'IMAX' && ' [PH]'}</span>
-                    {list.map((s) => <ShowtimePill key={s.id} show={s} withPrice />)}
+                  <div key={f}>
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <span className="w-14 rounded-full bg-surface-2 px-2 py-1 text-center text-xs font-semibold">{f}{f === 'IMAX' && ' [PH]'}</span>
+                      {list.map((s) => <ShowtimePill key={s.id} show={s} withPrice expanded={picked?.id === s.id} controls={PARTY_STEP_ID}
+                        onSelect={(x) => setPicked((p) => (p?.id === x.id && desktop ? null : x))} />)}
+                    </div>
+                    {picked && list.some((s) => s.id === picked.id) && <PartySizeStep key={picked.id} show={picked} desktop={desktop} onClose={() => setPicked(null)} />}
                   </div>
                 ))}
               </section>

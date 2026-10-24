@@ -5,14 +5,18 @@ import { Poster } from './Poster'
 
 export function seatsUrl(s: Show) { return `/movie/${s.movieId}/seats?show=${encodeURIComponent(s.id)}` }
 
-export function ShowtimePill({ show, withPrice = false }: { show: Show; withPrice?: boolean }) {
+export function ShowtimePill({ show, withPrice = false, onSelect, expanded, controls }: { show: Show; withPrice?: boolean; onSelect?: (s: Show) => void; expanded?: boolean; controls?: string }) {
   const nav = useNavigate()
   return (
     <button
+      type="button"
+      data-show={show.id}
       disabled={show.soldOut}
-      onClick={() => nav(seatsUrl(show))}
+      aria-expanded={onSelect ? !!expanded : undefined}
+      aria-controls={onSelect && expanded ? controls : undefined}
+      onClick={() => (onSelect ? onSelect(show) : nav(seatsUrl(show)))}
       className={cn('inline-flex min-h-11 items-center gap-2 rounded-full px-4 text-sm tabular-nums ring-1 ring-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-        show.soldOut ? 'cursor-not-allowed text-text-muted line-through opacity-60' : 'bg-surface-2 hover:bg-accent hover:text-accent-fg')}
+        show.soldOut ? 'cursor-not-allowed text-text-muted line-through opacity-60' : expanded ? 'bg-accent text-accent-fg' : 'bg-surface-2 hover:bg-accent hover:text-accent-fg')}
     >
       <span className="font-medium">{time(show.start)}</span>
       {withPrice && <span className="text-xs opacity-80">{show.soldOut ? 'Sold out' : eur(show.price)}</span>}
