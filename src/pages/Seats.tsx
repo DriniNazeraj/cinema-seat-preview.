@@ -10,7 +10,7 @@ let groupLib: GroupLib | null = null
 const loadGroup = () => import('@/lib/group').then((m) => (groupLib = m))
 import { useData } from '@/lib/useData'
 import { useBooking } from '@/lib/booking'
-import { decideThree, isPhone, type ThreeDecision } from '@/lib/device'
+import { decideThree, hasWebGL, isPhone, type ThreeDecision } from '@/lib/device'
 import { isHall3DReady } from '@/lib/prefetch3d'
 import { cn, dayLabel, eur, prefersReducedMotion, time } from '@/lib/format'
 import { Button, Container, ErrorCard, Skeleton } from '@/components/ui'
@@ -146,7 +146,7 @@ export default function SeatsPage() {
   useEffect(() => { if (showId) booking.setShow(showId) }, [showId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     resetSeatMapZoom()
-    const d = decideThree()
+    const d = decideThree({ deferProbe: true })
     setDecision(d)
     setThreeOn(d.mode === 'auto')
     // §10: skip curtains when 3D won't run, or if already shown this session; fallback opens the sheet at once.
@@ -178,7 +178,20 @@ export default function SeatsPage() {
     if (!mapReady || idle) return
     let cancelled = false, idleId: number | undefined, t: ReturnType<typeof setTimeout> | undefined
     const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void }
-    const go = () => { if (!cancelled) setIdle(true) }
+    const go = () => {
+      if (cancelled) return
+      const full = decideThree()
+      setDecision(full)
+      if (full.mode !== 'auto') {
+        try { sessionStorage.removeItem('lumen.curtain') } catch { /* ignore */ }
+        setThreeOn(false)
+        setCurtain('gone')
+        setSheetOpen(true)
+        setIdle(true)
+        return
+      }
+      requestAnimationFrame(() => { if (!cancelled) setIdle(true) })
+    }
     const raf = requestAnimationFrame(() => requestAnimationFrame(() => {
       if (w.requestIdleCallback) idleId = w.requestIdleCallback(go, { timeout: 1500 })
       else t = setTimeout(go, 1200)
@@ -324,6 +337,7 @@ export default function SeatsPage() {
     const u = new URL(location.href)
     if (v === 'simple') { leaving3D.current = true; localStorage.setItem('lumen.simple', '1'); u.searchParams.set('simple', '1'); setThreeOn(false) }
     else {
+      if (!hasWebGL()) { setDecision({ mode: 'off', reason: 'Your browser has 3D turned off' }); return }
       localStorage.removeItem('lumen.simple'); u.searchParams.delete('simple'); sessionStorage.removeItem('lumen.slowtoast') // fps toast may show again
       leaving3D.current = false; setLostNote(null); setThreeOn(true)
     }

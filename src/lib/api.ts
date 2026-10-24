@@ -2,9 +2,92 @@
  * Mock data layer — the ONLY place that knows where data comes from.
  * Everything here is PLACEHOLDER [PH]. When the real back end lands, swap the
  * function bodies for fetch() calls against docs/api.md; keep the zod schemas
- * and signatures so the UI doesn't change.
+ * and signatures so the UI doesn't change. Those schemas are duplicated in
+ * ./api-contract.ts (the shared contract). Keep the two copies identical.
  */
 import { z } from 'zod'
+
+export const CURRENCY = 'EUR' as const
+
+export const TicketTypeSchema = z.enum(['adult', 'child', 'disabled'])
+export type TicketType = z.infer<typeof TicketTypeSchema>
+
+export const PLACEHOLDER_TICKET_PRICES = {
+  adult: 1200,
+  child: 800,
+  disabled: 800,
+} as const satisfies Record<TicketType, number>
+
+export const COUNTS_AS_ADULT: readonly TicketType[] = ['adult', 'disabled'] as const
+export const ACCESS_SEAT_IDS = ['J1', 'J2', 'J15', 'J16'] as const
+
+export const TicketPriceSchema = z.object({
+  ticketType: TicketTypeSchema,
+  priceCents: z.number().int().nonnegative(),
+  currency: z.literal(CURRENCY),
+})
+export type TicketPrice = z.infer<typeof TicketPriceSchema>
+
+export type TicketPricesMap = {
+  adult: number
+  child: number
+  disabled: number
+}
+
+export type TicketPrices = TicketPrice[] & TicketPricesMap
+
+const TicketPricesInputSchema = z.union([
+  z.array(TicketPriceSchema),
+  z.object({
+    adult: z.number(),
+    child: z.number(),
+    disabled: z.number(),
+  }),
+])
+
+export function defaultTicketPrices(): TicketPrice[] {
+  return [
+    { ticketType: 'adult', priceCents: PLACEHOLDER_TICKET_PRICES.adult, currency: CURRENCY },
+    { ticketType: 'child', priceCents: PLACEHOLDER_TICKET_PRICES.child, currency: CURRENCY },
+    { ticketType: 'disabled', priceCents: PLACEHOLDER_TICKET_PRICES.disabled, currency: CURRENCY },
+  ]
+}
+
+export function attachTicketPriceGetters(tp: z.infer<typeof TicketPricesInputSchema> | undefined): TicketPrices {
+  const src = tp ?? defaultTicketPrices()
+  const arr: TicketPrice[] = Array.isArray(src)
+    ? src.map((p) => ({ ...p }))
+    : (['adult', 'child', 'disabled'] as const).map((ticketType) => {
+        const raw = src[ticketType]
+        const priceCents = raw >= 100 ? Math.round(raw) : Math.round(raw * 100)
+        return { ticketType, priceCents, currency: CURRENCY }
+      })
+  for (const p of arr) {
+    Object.defineProperty(arr, p.ticketType, {
+      value: p.priceCents / 100,
+      enumerable: false,
+      configurable: true,
+    })
+  }
+  return arr as TicketPrices
+}
+
+export function getTicketPriceCents(show: { ticketPrices?: unknown } | null | undefined, type: TicketType): number {
+  const tp = show?.ticketPrices
+  if (Array.isArray(tp)) {
+    const found = tp.find((p: { ticketType?: string; priceCents?: number }) => p?.ticketType === type)
+    if (found && typeof found.priceCents === 'number') return found.priceCents
+  }
+  if (tp && typeof tp === 'object' && type in tp) {
+    const v = (tp as Record<string, unknown>)[type]
+    if (typeof v === 'number') return v >= 100 ? Math.round(v) : Math.round(v * 100)
+  }
+  return PLACEHOLDER_TICKET_PRICES[type]
+}
+
+export function getTicketPriceEur(show: { ticketPrices?: unknown } | null | undefined, type: TicketType): number {
+  return getTicketPriceCents(show, type) / 100
+}
 
 export const MovieSchema = z.object({
   id: z.string(),
@@ -29,6 +112,8 @@ export const ShowSchema = z.object({
   hallId: z.string(),
   price: z.number(), // EUR per seat [PH]
   soldOut: z.boolean(),
+  currency: z.literal(CURRENCY).default(CURRENCY),
+  ticketPrices: TicketPricesInputSchema.default(() => defaultTicketPrices()).transform((tp) => attachTicketPriceGetters(tp)),
 })
 export type Show = z.infer<typeof ShowSchema>
 
@@ -52,6 +137,16 @@ export const HallSchema = z.object({
 })
 export type Hall = z.infer<typeof HallSchema>
 
+export function isAccessSeatId(seatId: string, hall?: Hall | null): boolean {
+  if (hall) {
+    for (const r of hall.rows) {
+      const found = r.seats.find((s) => s.id === seatId)
+      if (found) return found.type === 'access'
+    }
+  }
+  return (ACCESS_SEAT_IDS as readonly string[]).includes(seatId)
+}
+
 export const SeatMapSchema = z.object({
   show: ShowSchema,
   hall: HallSchema,
@@ -59,9 +154,23 @@ export const SeatMapSchema = z.object({
 })
 export type SeatMap = z.infer<typeof SeatMapSchema>
 
+export const TicketSelectionSchema = z.object({
+  seatId: SeatId,
+  ticketType: TicketTypeSchema,
+})
+export type TicketSelection = z.infer<typeof TicketSelectionSchema>
+
+export const BookingTicketSchema = z.object({
+  seatId: SeatId,
+  ticketType: TicketTypeSchema,
+  priceCents: z.number().int().nonnegative(),
+})
+export type BookingTicket = z.infer<typeof BookingTicketSchema>
+
 export const BookingInputSchema = z.object({
   showId: z.string(),
   seats: z.array(SeatId).min(1).max(8),
+  tickets: z.array(TicketSelectionSchema).min(1).max(8).optional(),
   name: z.string().trim().min(2, 'Please enter your name'),
   email: z.string().trim().email('Please enter a valid email'),
   phone: z.string().trim().optional(),
@@ -69,6 +178,7 @@ export const BookingInputSchema = z.object({
 export type BookingInput = z.infer<typeof BookingInputSchema>
 
 export const BookingSchema = BookingInputSchema.extend({
+  tickets: z.array(BookingTicketSchema).optional(),
   ref: z.string(),
   total: z.number(),
   createdAt: z.string(),
@@ -78,6 +188,29 @@ export type Booking = z.infer<typeof BookingSchema>
 
 export const MAX_SEATS = 8
 export const HOLD_SECONDS = 600
+
+export class ChildOnlyBookingError extends Error {
+  readonly status = 422 as const
+  readonly code = 'CHILD_ONLY_BOOKING' as const
+  constructor(message = 'Children need an adult or Disability ticket with them [PH]') {
+    super(message)
+    this.name = 'ChildOnlyBookingError'
+  }
+}
+
+export class AccessSeatMismatchError extends Error {
+  readonly status = 422 as const
+  readonly code = 'ACCESS_SEAT_MISMATCH' as const
+  readonly seatIds: string[]
+  constructor(
+    seatIds: string[],
+    message = `Seat ticket mismatch on ${seatIds.join(', ')}: wheelchair spaces require a Disability ticket and standard seats cannot use Disability tickets [PH]`,
+  ) {
+    super(message)
+    this.name = 'AccessSeatMismatchError'
+    this.seatIds = seatIds
+  }
+}
 
 // ---------------------------------------------------------------- mock data
 const MOVIES: Movie[] = ([
@@ -142,7 +275,17 @@ function buildShows(): Show[] {
         start.setHours(hh, mm)
         const format = (['2D', '3D', 'IMAX'] as const)[(mi + ti) % 3]
         const id = `${m.id}-${dayKey(day)}-${t.replace(':', '')}`
-        shows.push({ id, movieId: m.id, start: start.toISOString(), format, hallId: HALLS[(mi + ti) % 2].id, price: PRICE[format], soldOut: (mi + ti + d) % 11 === 0 })
+        shows.push({
+          id,
+          movieId: m.id,
+          start: start.toISOString(),
+          format,
+          hallId: HALLS[(mi + ti) % 2].id,
+          price: PRICE[format],
+          soldOut: (mi + ti + d) % 11 === 0,
+          currency: CURRENCY,
+          ticketPrices: attachTicketPriceGetters(defaultTicketPrices()),
+        })
       })
     })
   }
@@ -151,16 +294,23 @@ function buildShows(): Show[] {
 let SHOWS: Show[] | null = null
 const shows = () => (SHOWS ??= buildShows())
 
+function applyQaTicketPrices(show: Show): Show {
+  try {
+    const raw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('lumen.qa.ticketPrices') : null
+    if (!raw) return show
+    const parsed = JSON.parse(raw)
+    const tp = attachTicketPriceGetters(parsed)
+    return { ...show, ticketPrices: tp }
+  } catch {
+    return show
+  }
+}
+
 function takenFor(show: Show, hall: Hall): string[] {
   const all = hall.rows.flatMap((r) => r.seats.map((s) => s.id))
   if (show.soldOut) return all
   const rnd = seeded(hash(show.id))
-  const taken = all.filter(() => rnd() < 0.28)
-  // QA fixture: one taken access seat (J2) on this show; other access seats stay free.
-  if (show.id === 'iron-orchard-2026-10-25-1845') {
-    return [...taken.filter((id) => !['J1', 'J2', 'J15', 'J16'].includes(id)), 'J2']
-  }
-  return taken
+  return all.filter(() => rnd() < 0.28)
 }
 
 const delay = (ms = 120) => new Promise((r) => setTimeout(r, ms))
@@ -179,11 +329,12 @@ export async function listShows(opts: { movieId?: string; date?: string } = {}):
   await delay(40)
   return z.array(ShowSchema).parse(
     shows().filter((s) => (!opts.movieId || s.movieId === opts.movieId) && (!opts.date || dayKey(new Date(s.start)) === opts.date)),
-  )
+  ).map(applyQaTicketPrices)
 }
 export async function getShow(id: string): Promise<Show | null> {
   await delay(40)
-  return shows().find((s) => s.id === id) ?? null
+  const found = shows().find((s) => s.id === id) ?? endedShow(id)
+  return found ? applyQaTicketPrices(ShowSchema.parse(found)) : null
 }
 /** fix15.2: typed API errors, mirroring the real API (PR #3): 404 NOT_FOUND = show missing; anything else (network, 5xx) is transient. No 410. */
 export class NotFoundError extends Error { readonly status = 404; readonly code = 'NOT_FOUND'; constructor(msg = 'Not found') { super(msg); this.name = 'NotFoundError' } }
@@ -198,7 +349,17 @@ function endedShow(id: string): Show | undefined {
   const start = new Date(`${day}T${hh}:${mm}:00`), age = Date.now() - start.getTime()
   if (!(age > 0 && age < 60 * 864e5)) return
   const format = (['2D', '3D', 'IMAX'] as const)[(mi + ti) % 3]
-  return { id, movieId, start: start.toISOString(), format, hallId: HALLS[(mi + ti) % 2].id, price: PRICE[format], soldOut: true }
+  return {
+    id,
+    movieId,
+    start: start.toISOString(),
+    format,
+    hallId: HALLS[(mi + ti) % 2].id,
+    price: PRICE[format],
+    soldOut: true,
+    currency: CURRENCY,
+    ticketPrices: attachTicketPriceGetters(defaultTicketPrices()),
+  }
 }
 export async function getSeatMap(showId: string): Promise<SeatMap> {
   await delay()
@@ -206,8 +367,9 @@ export async function getSeatMap(showId: string): Promise<SeatMap> {
   let fail = false; try { fail = sessionStorage.getItem('lumen.qa.failSeatMap') === '1' } catch { /* no storage */ }
   if (fail) throw new NetworkError('Simulated network failure')
   const found = shows().find((s) => s.id === showId)
-  const show = found && new Date(found.start).getTime() <= Date.now() ? { ...found, soldOut: true } : found ?? endedShow(showId)
-  if (!show) throw new NotFoundError('Show not found')
+  const rawShow = found && new Date(found.start).getTime() <= Date.now() ? { ...found, soldOut: true } : found ?? endedShow(showId)
+  if (!rawShow) throw new NotFoundError('Show not found')
+  const show = applyQaTicketPrices(rawShow)
   const hall = HALLS.find((h) => h.id === show.hallId)!
   return SeatMapSchema.parse({ show, hall, taken: takenFor(show, hall) })
 }
@@ -217,10 +379,66 @@ export async function createBooking(input: BookingInput): Promise<Booking> {
   const map = await getSeatMap(data.showId)
   const clash = data.seats.filter((s) => map.taken.includes(s))
   if (clash.length) throw new Error(`Seat(s) no longer free: ${clash.join(', ')}`)
+
+  try {
+    const qaErrRaw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('lumen.qa.bookingError') : null
+    if (qaErrRaw) {
+      sessionStorage.removeItem('lumen.qa.bookingError')
+      const qaErr = JSON.parse(qaErrRaw) as { code?: string; seatIds?: string[]; message?: string }
+      if (qaErr.code === 'ACCESS_SEAT_MISMATCH') {
+        throw new AccessSeatMismatchError(qaErr.seatIds?.length ? qaErr.seatIds : [data.seats[0]], qaErr.message)
+      }
+      if (qaErr.code === 'CHILD_ONLY_BOOKING') {
+        throw new ChildOnlyBookingError(qaErr.message)
+      }
+    }
+  } catch (e) {
+    if (e instanceof AccessSeatMismatchError || e instanceof ChildOnlyBookingError) throw e
+  }
+
+  const resolvedTickets: TicketSelection[] = data.tickets ?? data.seats.map((seatId) => ({
+    seatId,
+    ticketType: isAccessSeatId(seatId, map.hall) ? 'disabled' : 'adult',
+  }))
+
+  const seatSet = new Set(data.seats)
+  const ticketBySeat = new Map<string, TicketType>()
+  const mismatchSeats: string[] = []
+
+  for (const t of resolvedTickets) {
+    if (!seatSet.has(t.seatId) || ticketBySeat.has(t.seatId)) {
+      if (!mismatchSeats.includes(t.seatId)) mismatchSeats.push(t.seatId)
+      continue
+    }
+    ticketBySeat.set(t.seatId, t.ticketType)
+    const isAccess = isAccessSeatId(t.seatId, map.hall)
+    if ((isAccess && t.ticketType !== 'disabled') || (!isAccess && t.ticketType === 'disabled')) {
+      mismatchSeats.push(t.seatId)
+    }
+  }
+  for (const s of data.seats) {
+    if (!ticketBySeat.has(s) && !mismatchSeats.includes(s)) mismatchSeats.push(s)
+  }
+  if (mismatchSeats.length > 0) {
+    throw new AccessSeatMismatchError(mismatchSeats)
+  }
+
+  if (!resolvedTickets.some((t) => COUNTS_AS_ADULT.includes(t.ticketType))) {
+    throw new ChildOnlyBookingError()
+  }
+
+  const bookingTickets: BookingTicket[] = data.seats.map((seatId) => {
+    const ticketType = ticketBySeat.get(seatId)!
+    const priceCents = getTicketPriceCents(map.show, ticketType)
+    return { seatId, ticketType, priceCents }
+  })
+  const totalCents = bookingTickets.reduce((sum, t) => sum + t.priceCents, 0)
+
   const booking: Booking = BookingSchema.parse({
     ...data,
+    tickets: bookingTickets,
     ref: 'LUM-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
-    total: data.seats.length * map.show.price,
+    total: totalCents / 100,
     createdAt: new Date().toISOString(),
     placeholder: true,
   })

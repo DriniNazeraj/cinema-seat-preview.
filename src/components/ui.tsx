@@ -1,5 +1,5 @@
 import { Link, type LinkProps } from 'react-router-dom'
-import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react'
 import { cn } from '@/lib/format'
 
 const base = 'inline-flex items-center justify-center gap-2 rounded-full font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:opacity-50 disabled:cursor-not-allowed min-h-11 px-5 text-sm'
@@ -15,14 +15,14 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
 export const ButtonLink = forwardRef<HTMLAnchorElement, LinkProps & { variant?: V }>(function ButtonLink({ variant = 'primary', className, ...p }, ref) {
   return <Link ref={ref} className={cn(base, variants[variant], className)} {...p} />
 })
-export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn('rounded-xl bg-surface ring-1 ring-border', className)}>{children}</div>
+export function Card({ className, children, ...p }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('rounded-xl bg-surface ring-1 ring-border', className)} {...p}>{children}</div>
 }
 export function Skeleton({ className }: { className?: string }) {
   return <div className={cn('animate-pulse rounded-xl bg-surface-2', className)} />
 }
-export function Container({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn('mx-auto w-full max-w-6xl px-4 md:px-6', className)}>{children}</div>
+export function Container({ className, children, ...p }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('mx-auto w-full max-w-6xl px-4 md:px-6', className)} {...p}>{children}</div>
 }
 export function PH() {
   return <span className="ml-1 rounded bg-surface-2 px-1 align-middle text-[10px] font-medium tracking-normal text-text-muted" title="Placeholder">[PH]</span>

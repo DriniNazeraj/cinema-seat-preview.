@@ -3,11 +3,22 @@ import { useSearchParams } from 'react-router-dom'
 import { CircleCheck, CalendarPlus } from 'lucide-react'
 import { getBooking, getMovie, getSeatMap, type Booking } from '@/lib/api'
 import { useBooking } from '@/lib/booking'
-import { dayLabel, time } from '@/lib/format'
+import { dayLabel, eur, time } from '@/lib/format'
 import { Button, ButtonLink, Card, Container } from '@/components/ui'
 import { SeatMap2D } from '@/components/SeatMap2D'
 import { StepIndicator } from '@/components/Shows'
 import type { Movie, SeatMap } from '@/lib/api'
+
+function formatTicketSummary(tickets: Booking['tickets']): string | null {
+  if (!tickets || !tickets.length) return null
+  const counts = { adult: 0, child: 0, disabled: 0 }
+  for (const t of tickets) counts[t.ticketType] = (counts[t.ticketType] ?? 0) + 1
+  const parts: string[] = []
+  if (counts.adult > 0) parts.push(`${counts.adult} × Adult`)
+  if (counts.child > 0) parts.push(`${counts.child} × Child (under 12)`)
+  if (counts.disabled > 0) parts.push(`${counts.disabled} × Disability`)
+  return parts.join(' · ')
+}
 
 export default function Confirmed() {
   const [q] = useSearchParams()
@@ -37,6 +48,8 @@ export default function Confirmed() {
     a.click()
   }
 
+  const ticketSummary = data ? formatTicketSummary(data.b.tickets) : null
+
   return (
     <div className="pb-16">
       <div className="sticky top-16 z-30 border-b border-border bg-bg/90 backdrop-blur"><Container className="flex h-12 items-center overflow-x-auto"><StepIndicator step={3} /></Container></div>
@@ -49,6 +62,10 @@ export default function Confirmed() {
           <>
             <p className="mt-2 text-text-muted">Ref <span className="font-semibold text-text">{data.b.ref}</span> [PH] · {data.movie?.title} · {dayLabel(data.map.show.start)} {time(data.map.show.start)}</p>
             <div className="mt-4 flex flex-wrap justify-center gap-2">{data.b.seats.map((s) => <span key={s} className="rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-fg">{s}</span>)}</div>
+            <p className="mt-3 text-sm text-text-muted" data-testid="confirmed-tickets-total">
+              {ticketSummary ? <><span data-testid="confirmed-tickets">{ticketSummary}</span> · </> : null}
+              <span data-testid="confirmed-total" className="font-semibold text-text">{eur(data.b.total)} [PH]</span>
+            </p>
             <Card className="mt-6 p-4"><SeatMap2D hall={data.map.hall} taken={new Set([...taken].filter((t) => !data.b.seats.includes(t)))} selected={data.b.seats} price={data.map.show.price} onPick={() => {}} readOnly compact /></Card>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <Button variant="ghost" onClick={ics}><CalendarPlus className="size-4" /> Add to calendar</Button>

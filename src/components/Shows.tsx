@@ -53,7 +53,7 @@ export function PosterCard({ movie, shows }: { movie: Movie; shows?: Show[] }) {
 }
 
 export function StepIndicator({ step }: { step: 0 | 1 | 2 | 3 }) {
-  const steps = ['Showtime', 'Seats', 'Details', 'Done']
+  const steps = ['Showtime', 'Seats', 'Tickets & Details', 'Done']
   return (
     <ol className="flex items-center gap-2 text-xs md:text-sm" aria-label="Booking steps">
       {steps.map((s, i) => (

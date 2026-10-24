@@ -8,17 +8,21 @@ import { useRef, type ReactNode } from 'react'
 export function SeatSheet({ open, onCollapse, title, children, footer, onEscape }: { open: boolean; onCollapse: () => void; title: string; children: ReactNode; footer: ReactNode; onEscape?: (e: KeyboardEvent) => void }) {
   const startY = useRef<number | null>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
+  const focusTitleDeferred = (e: Event) => {
+    e.preventDefault()
+    requestAnimationFrame(() => titleRef.current?.focus({ preventScroll: true }))
+  }
   return (
     <D.Root open={open} modal={false} onOpenChange={(o) => { if (!o) onCollapse() }}>
       <D.Portal>
         <D.Content
-          onOpenAutoFocus={(e) => { e.preventDefault(); titleRef.current?.focus() }}
+          onOpenAutoFocus={focusTitleDeferred}
           onInteractOutside={(e) => e.preventDefault()}
           // fix16.1: Radix catches Esc on document (capture phase) before any inner handler; let the page claim it first
           onEscapeKeyDown={(e) => onEscape?.(e)}
           className="fixed inset-x-0 bottom-0 z-[55] flex h-[72dvh] flex-col rounded-t-2xl bg-surface/95 ring-1 ring-border backdrop-blur focus:outline-none md:inset-x-auto md:bottom-4 md:right-4 md:top-16 md:h-auto md:w-[min(480px,40vw)] md:rounded-2xl"
         >
-          <FocusScope trapped={open} loop asChild onMountAutoFocus={(e) => { e.preventDefault(); titleRef.current?.focus({ preventScroll: true }) }}>
+          <FocusScope trapped={open} loop asChild onMountAutoFocus={focusTitleDeferred}>
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex h-6 cursor-grab touch-none items-center justify-center md:hidden" aria-hidden
                 onPointerDown={(e) => { startY.current = e.clientY }}
