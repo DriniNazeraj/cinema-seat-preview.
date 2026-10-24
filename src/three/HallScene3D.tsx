@@ -162,7 +162,7 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
     if (pv) { tmp.position.set(pv.pos.x, pv.pos.y, pv.pos.z); tmp.updateMatrix(); previewEdge.current!.setMatrixAt(0, tmp.matrix) }
     previewEdge.current!.count = pv ? 1 : 0; previewEdge.current!.instanceMatrix.needsUpdate = true
   }, [items, open, shut, taken, selected, hovered, preview, tmp])
-  const { camera: cam, size, gl } = useThree()
+  const { camera: cam, size, gl, scene } = useThree()
     // fix13 hit test: return a screen point where a tap really lands on THIS seat (raycast-verified against both seat meshes);
   // the old single cushion point was often hidden by the row nearer the camera, so taps there opened the neighbour.
   useEffect(() => {
@@ -212,12 +212,31 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
   // rect and the camera matrices of the frame on screen, and confirmed at pointerup (same pointer, < 8px travel, no 2nd finger).
   const pickRef = useRef<{ id: number; x: number; y: number; seat: typeof items[number]['seat'] } | null>(null)
   const onPickRef = useRef(onPick); onPickRef.current = onPick
+  // fix16.2 (QA, phone taps ~150-250ms into the Back glide opened H8/I8/G8 for F8): a touch pointerdown is dispatched a frame
+  // or more after the finger lands (touch input is rAF-aligned, and busy phone main threads add more), so by the time it ran,
+  // the glide had already rendered newer frames and `cam` no longer matched what the finger touched. Mouse pointerdown is
+  // dispatched almost at once, so desktop never showed it. Now every rendered frame's camera pose is kept (last ~0.5s) and the
+  // pick raycasts against the frame that was on screen at e.timeStamp (the input's own timestamp), for every pointer type.
+  const poses = useRef<{ t: number; world: THREE.Matrix4; projInv: THREE.Matrix4 }[]>([])
   useEffect(() => {
-    const el = gl.domElement, rc = new THREE.Raycaster(), ndc = new THREE.Vector2()
-    const seatAt = (cx: number, cy: number) => {
+    const root = scene, prev = root.onAfterRender
+    root.onAfterRender = (...a) => {
+      prev.apply(root, a)
+      const now = performance.now(), q = poses.current
+      q.push({ t: now, world: cam.matrixWorld.clone(), projInv: cam.projectionMatrixInverse.clone() })
+      while (q.length > 2 && now - q[0].t > 500) q.shift()
+    }
+    return () => { root.onAfterRender = prev }
+  }, [cam, scene])
+  useEffect(() => {
+    const el = gl.domElement, rc = new THREE.Raycaster(), ndc = new THREE.Vector2(), shot = new THREE.PerspectiveCamera()
+    const seatAt = (cx: number, cy: number, at?: number) => {
       const r = el.getBoundingClientRect(); if (!mesh.current || !takenMesh.current || !r.width) return null
       ndc.set((cx - r.left) / r.width * 2 - 1, -((cy - r.top) / r.height) * 2 + 1)
-      rc.setFromCamera(ndc, cam) // matrixWorld = the frame being shown (updated by the renderer)
+      let pose: (typeof poses.current)[number] | undefined
+      if (at !== undefined) for (const f of poses.current) { if (f.t <= at) pose = f; else break }
+      if (pose) { shot.matrixWorld.copy(pose.world); shot.projectionMatrixInverse.copy(pose.projInv); rc.setFromCamera(ndc, shot) }
+      else rc.setFromCamera(ndc, cam) // no older frame kept: the frame being shown (updated by the renderer)
       const hit = rc.intersectObjects([mesh.current, takenMesh.current], false)[0]
       return hit?.instanceId != null ? (hit.object === mesh.current ? open : shut)[hit.instanceId]?.seat ?? null : null
     }
@@ -225,7 +244,8 @@ function Seats({ hall, taken, selected, hovered, preview, onPick, onHover, looks
     const down = (e: PointerEvent) => {
       pointers++
       if (pointers > 1 || e.button > 0) { pickRef.current = null; return }
-      const seat = seatAt(e.clientX, e.clientY)
+      const seat = seatAt(e.clientX, e.clientY, e.timeStamp)
+      ;(window as Window & { __lumenPick?: unknown }).__lumenPick = { seat: seat?.id ?? null, live: seatAt(e.clientX, e.clientY)?.id ?? null, lag: performance.now() - e.timeStamp, frames: poses.current.length, oldest: e.timeStamp - (poses.current[0]?.t ?? e.timeStamp) } // QA hook
       pickRef.current = seat ? { id: e.pointerId, x: e.clientX, y: e.clientY, seat } : null
     }
     const up = (e: PointerEvent) => {
