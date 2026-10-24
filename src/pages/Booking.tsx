@@ -130,10 +130,14 @@ export default function BookingPage() {
       b.clear()
       nav(`/booking/confirmed?ref=${res.ref}`)
     } catch (err) {
+      const withPh = (m: string) => {
+        const clean = m.replace(/(\s*\[PH\])+\s*$/, "").trimEnd()
+        return `${clean} [PH]`
+      }
       if (err instanceof ChildOnlyBookingError) {
-        setTicketServerErr(`${err.message} [PH]`)
+        setTicketServerErr(withPh(err.message))
       } else if (err instanceof AccessSeatMismatchError) {
-        setTicketServerErr(`${err.message} [PH]`)
+        setTicketServerErr(withPh(err.message))
         setMismatchSeatIds(err.seatIds)
       } else {
         toast((err as Error).message)

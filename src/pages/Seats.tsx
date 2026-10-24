@@ -229,7 +229,7 @@ export default function SeatsPage() {
       return
     }
     if (selected.includes(seat.id)) return // tapping a seat already in the block does nothing
-    const g = G.placeGroup(map.data!.hall, seat, party, taken)
+    const g = party === 1 ? { ids: [seat.id], short: false } : G.placeGroup(map.data!.hall, seat, party, taken)
     if (!g.ids.length) { // wheelchair space in group mode: never auto-included
       setShortK(0); setSay('Wheelchair spaces are picked one at a time. Choose Split the group [PH]'); return
     }

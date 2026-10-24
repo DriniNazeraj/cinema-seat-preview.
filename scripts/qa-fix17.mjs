@@ -211,6 +211,43 @@ try {
     check('390px mobile /booking has no horizontal overflow', !overflow)
     await ctx.close()
   }
+
+  // 5. fix17.1: 2D party=1 picks access seat (J1) directly without "Split the group" + 422 errors do not duplicate [PH]
+  {
+    const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } })
+    const p = await ctx.newPage()
+    await p.goto(`${BASE}/movie/iron-orchard/seats?party=1&2d=1`, { waitUntil: 'networkidle' })
+    await p.locator('[data-seat]').first().waitFor({ state: 'visible' })
+    const freeAccess = p.locator('button[data-seat="J1"]:not([aria-disabled="true"]), button[data-seat="J2"]:not([aria-disabled="true"]), button[data-seat="J15"]:not([aria-disabled="true"]), button[data-seat="J16"]:not([aria-disabled="true"])').first()
+    const accessId = await freeAccess.getAttribute('data-seat')
+    await freeAccess.click()
+    await p.waitForTimeout(100)
+    check('2D party=1 tapping access seat does not show Split the group', (await p.getByRole('button', { name: /Split the group/ }).count()) === 0 && (await p.locator('[data-short]').count()) === 0)
+    const contBtn = p.getByRole('button', { name: 'Continue' }).last()
+    check('2D party=1 tapping access seat enables Continue immediately', !(await contBtn.isDisabled()))
+    await contBtn.click()
+    await p.waitForURL('**/booking')
+    await p.getByTestId(`ticket-locked-${accessId}`).waitFor({ state: 'visible' })
+    check('2D party=1 access seat lands on /booking with locked Disability row', (await p.getByTestId(`ticket-locked-${accessId}`).count()) === 1)
+
+    // Test default 422 ACCESS_SEAT_MISMATCH error has single [PH] (no "[PH] [PH]")
+    await p.evaluate(() => sessionStorage.setItem('lumen.qa.bookingError', JSON.stringify({ code: 'ACCESS_SEAT_MISMATCH' })))
+    await p.getByLabel('Full name').fill('Katherine Johnson')
+    await p.getByLabel('Email').fill('katherine@example.com')
+    await p.getByTestId('confirm-booking-btn').click()
+    const errEl = p.getByTestId('ticket-error')
+    await errEl.waitFor({ state: 'visible' })
+    const mismatchMsg = (await errEl.textContent()) || ''
+    check('Default 422 ACCESS_SEAT_MISMATCH message ends with single [PH]', mismatchMsg.endsWith('[PH]') && !mismatchMsg.includes('[PH] [PH]'), mismatchMsg)
+
+    // Test default 422 CHILD_ONLY_BOOKING error has single [PH] (no "[PH] [PH]")
+    await p.evaluate(() => sessionStorage.setItem('lumen.qa.bookingError', JSON.stringify({ code: 'CHILD_ONLY_BOOKING' })))
+    await p.getByTestId('confirm-booking-btn').click()
+    await p.waitForTimeout(500)
+    const childMsg = (await errEl.textContent()) || ''
+    check('Default 422 CHILD_ONLY_BOOKING message ends with single [PH]', childMsg === 'Children need an adult or Disability ticket with them [PH]', childMsg)
+    await ctx.close()
+  }
 } finally {
   await b.close()
 }

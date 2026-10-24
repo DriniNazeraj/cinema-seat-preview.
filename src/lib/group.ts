@@ -19,6 +19,7 @@ export function runAround(hall: Hall, seat: Seat, taken: Set<string>): Seat[] {
 
 /** N seats incl. the tapped one: centred on it, slid inside the run (row end / taken / aisle). Fewer when the run is short. */
 export function placeGroup(hall: Hall, seat: Seat, n: number, taken: Set<string>): { ids: string[]; short: boolean } {
+  if (n === 1) return taken.has(seat.id) ? { ids: [], short: true } : { ids: [seat.id], short: false }
   const run = runAround(hall, seat, taken)
   if (!run.length) return { ids: [], short: true }
   if (run.length <= n) return { ids: run.map((s) => s.id), short: run.length < n }
