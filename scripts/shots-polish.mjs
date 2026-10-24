@@ -1,0 +1,22 @@
+import { chromium } from 'playwright'
+const BASE = 'http://localhost:4174', OUT = '/workspace/cinema/final', errs = []
+const b = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] })
+const toSeats = async (p) => { await p.goto(BASE + '/movie/starlight-run'); await p.locator('main section button:not([disabled]):has-text("€")').first().click(); await p.waitForURL(/seats/); await p.waitForSelector('canvas', { timeout: 20000 }); await p.waitForTimeout(2000) }
+const m = await (await b.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true })).newPage()
+m.on('pageerror', (e) => errs.push(e.message))
+await toSeats(m)
+await m.locator('[data-seat][aria-label^="Row E"][aria-label*="free"]').nth(6).tap(); await m.waitForTimeout(1500)
+console.log('mobile btn sizes', await m.evaluate(() => ['Reset view', 'Simple view'].map((l) => { const r = document.querySelector(`[aria-label="${l}"]`).getBoundingClientRect(); return `${l} ${r.width}x${r.height}` })))
+console.log('step bar overflow', await m.evaluate(() => { const o = document.querySelector('[aria-label="Booking steps"]'); return o.scrollWidth > o.parentElement.clientWidth }))
+await m.screenshot({ path: `${OUT}/polish-seats-mobile-390.png` })
+const d = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage()
+d.on('pageerror', (e) => errs.push(e.message))
+await d.goto(BASE + '/'); await d.waitForTimeout(800)
+await d.screenshot({ path: `${OUT}/polish-home-desktop-1440.png` })
+await toSeats(d)
+await d.locator('[data-seat^="A"]').nth(6).hover(); await d.waitForTimeout(300)
+console.log('tooltip placement row A:', await d.getAttribute('[data-tip]', 'data-tip'))
+await d.screenshot({ path: `${OUT}/polish-seats-desktop-1440-tooltip-rowA.png` })
+await d.locator('[data-seat^="F"]').nth(6).hover(); await d.waitForTimeout(200)
+console.log('tooltip placement row F:', await d.getAttribute('[data-tip]', 'data-tip'))
+await b.close(); console.log('errors', errs)
